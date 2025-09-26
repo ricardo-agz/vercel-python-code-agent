@@ -45,15 +45,15 @@ app.add_middleware(
 )
 
 ALLOWED_MODELS: list[str] = [
+    "anthropic/claude-4-sonnet",
+    "anthropic/claude-3.7-sonnet",
+    "anthropic/claude-3.5-haiku",
+    "xai/grok-4",
+    "xai/grok-4-fast-non-reasoning",
     "openai/gpt-4.1",
     "openai/gpt-4.1-mini",
     "openai/gpt-5",
     "openai/gpt-5-mini",
-    # "anthropic/claude-4-sonnet",
-    # "anthropic/claude-3.7-sonnet",
-    # "anthropic/claude-3.5-haiku",
-    # "xai/grok-4",
-    # "xai/grok-4-fast-non-reasoning",
 ]
 
 SLEEP_INTERVAL_SECONDS = 0.05

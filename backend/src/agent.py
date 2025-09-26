@@ -30,52 +30,61 @@ We support either:
 
 logger = logging.getLogger("ide_agent.agent")
 
-# api_key = os.getenv("AI_GATEWAY_API_KEY") or os.getenv("VERCEL_OIDC_TOKEN")
-# # base_url = "https://ai-gateway.vercel.sh/v1"
-# base_url = "http://localhost:3004/v1"
-# if not api_key:
-#     raise ValueError("AI_GATEWAY_API_KEY or VERCEL_OIDC_TOKEN is not set")
+api_key = os.getenv("AI_GATEWAY_API_KEY") or os.getenv("VERCEL_OIDC_TOKEN")
+base_url = "https://ai-gateway.vercel.sh/v1"
+if not api_key:
+    raise ValueError("AI_GATEWAY_API_KEY or VERCEL_OIDC_TOKEN is not set")
 
-# client = AsyncOpenAI(api_key=api_key, base_url=base_url)
-# set_default_openai_client(client=client, use_for_tracing=False)
-# set_default_openai_api("chat_completions")
-# set_tracing_disabled(disabled=True)
+client = AsyncOpenAI(api_key=api_key, base_url=base_url)
+set_default_openai_client(client=client, use_for_tracing=False)
+set_default_openai_api("chat_completions")
+set_tracing_disabled(disabled=True)
 
 
 instructions = """
-You are an IDE assistant that helps with coding tasks over an entire project (multiple files).
-Always start with a brief plan for anything non-trivial.
+You are an IDE assistant that improves code across a multi-file project.
 
-You will be given a project file tree and a query. The project is presented as a list of files
-with their full paths and contents, each file rendered with line numbers for easy reference.
+What you can do
+- Read the "Project files (paths)" and "Project contents (with line numbers)" sections.
+- Propose concrete edits using the provided tools. Do not write code blocks in chat; the UI shows diffs.
+- Make small, targeted changes; avoid unrelated refactors or reformatting.
+- Preserve existing indentation, style, and structure. Do not add or remove blank lines unnecessarily.
+- If multiple non-adjacent edits are needed, make multiple scoped edits rather than a whole-file rewrite.
+- When unsure about intent, prefer a minimal safe change and briefly note assumptions.
+- When the user explicitly requests a new feature, large refactor, or a rebuild, you MAY add substantial new code, move files/folders, or delete/replace existing code to fulfill the request.
 
-Your job is to either respond to the query with an answer, or use the available tools to propose
-edits to a specific file. When editing, you MUST specify which file you are editing via `file_path`,
-and you MUST target a concrete range of lines and provide the replacement text. Do not include line
-numbers in the replacement text itself.
+How to work
+- Start non-trivial tasks with a short plan: goals, files to touch, and risks.
+- Use think() to record that plan succinctly (3–7 bullets). Keep it brief.
+- Use edit_code() for precise changes: set an exact line range and provide a replace string that matches only that range.
+- For multi-line updates, set find to the exact current text within the chosen range and replace with the full new text for that same range.
+- Use create_file() to add new files, and rename_file()/rename_folder() to move things. Use delete_* sparingly and only when clearly safe.
+- Ask for request_code_execution() to run or preview the project when runtime feedback is needed; include what will be executed and what success looks like in your surrounding message.
+- For large refactors or rebuilds:
+  - Outline a stepwise plan in think() first.
+  - Prefer archiving via rename_file/rename_folder (e.g., move to a `legacy/` path) before destructive deletes, unless the user explicitly asks to remove code.
+  - Create new files and modules with create_file() and adjust imports/usages with edit_code().
+  - Keep the project runnable after each major step; use request_code_execution() to validate.
 
-You can also create new files when needed. Use the `create_file` tool with a `file_path` and the
-full initial contents of the file. Prefer small, focused files and idiomatic structure.
+Output rules
+- For answers only: reply concisely and skimmably.
+- For code changes: summarize the edits you made (files, rationale, risks) without any code blocks. The UI shows diffs.
+- Never include line numbers in replacement text. Always preserve file formatting and imports.
+- If a tool call fails (e.g., file not found or text not matched), adjust your selection and try again with a narrower, exact range.
+ - For large refactors/rebuilds: list major files created, moved, or deleted, note entry points, and mention any follow-up actions the user should take (e.g., install deps, restart dev server).
 
-When code is shown to you as:
-[1]def hello_world():
-[2]    print("Hello, world!")
+Available tools (high level):
+- think(thoughts): jot a brief plan.
+- edit_code(file_path, find, find_start_line, find_end_line, replace): make a scoped, in-place change.
+- create_file(file_path, content): add a new file with full content.
+- delete_file(file_path): remove an existing file (use with caution).
+- rename_file(old_path, new_path): move or rename a file and then update imports with edits.
+- create_folder(folder_path): declare a folder (UI only; files control structure).
+- delete_folder(folder_path): remove a folder and its files (use with caution).
+- rename_folder(old_path, new_path): move a folder and all files under it.
+- request_code_execution(response_on_reject): ask the UI to run code; you'll resume with the result.
 
-This means the code is actually:
-def hello_world():
-    print("Hello, world!")
-
-In your final response, clearly and concisely explain what you did without writing any code snippets.
-The UI will show diffs to the user.
-\n
-Available tools for project changes:
-- create_file(file_path, content): create or overwrite a file.
-- edit_code(file_path, find, find_start_line, find_end_line, replace): scoped edit in an existing file.
-- delete_file(file_path): remove a file from the project.
-- rename_file(old_path, new_path): move or rename a single file.
-- create_folder(folder_path): declare a folder (UI-only; no files created).
-- delete_folder(folder_path): remove a folder and its files.
-- rename_folder(old_path, new_path): move/rename a folder and its files.
+Remember: small, correct, reversible edits; clear summaries; better UX over aggressive refactors.
 """
 
 
@@ -126,7 +135,7 @@ def build_project_input(
         f"\n\n".join(files_rendered)
         + "\n---\n"
         + f"Query: {query}{prior_block}"
-        + "\n---\nGuidance: When proposing edits, call the edit tool with the target file_path, the line range, and your replacement text."
+        + "\n---\nGuidance: For code changes, always call edit_code(file_path, find, find_start_line, find_end_line, replace) with an exact line range and the precise text to replace. Do not include line numbers in replacement text. For multiple non-adjacent changes, call edit_code multiple times. Preserve existing formatting and make minimal, targeted edits.\nIf the user requests a new feature, large refactor, or rebuild, you may also use create_file, rename_file/rename_folder, and delete_file/delete_folder. Prefer archiving via rename into a 'legacy/' path over deletion unless the user explicitly wants removal. After moves, update imports/usages with edit_code, and consider request_code_execution to validate."
     )
 
 
@@ -179,10 +188,15 @@ def _perform_edit_code(file_content: str, args: dict[str, Any]) -> dict[str, Any
 
 @function_tool
 async def think(ctx: RunContextWrapper[IDEContext], thoughts: str) -> str:
-    """Think deeply about the task and plan next steps.
+    """Record a concise plan for the current task.
+
+    Use this before non-trivial changes to outline intent (3–7 short bullets).
+    Keep it brief and high-signal; do not include secrets or sensitive data.
 
     Args:
-        thoughts: The plan or reasoning the assistant wants to record.
+        thoughts: Short plan or reasoning to log.
+    Returns:
+        The recorded plan text.
     """
     tool_id = f"tc_{len(ctx.context.events)+1}"
     ctx.context.events.append(
@@ -213,14 +227,27 @@ async def edit_code(
     find_end_line: int,
     replace: str,
 ) -> str:
-    """Edit a specific file between the specified line numbers, replacing occurrences of 'find' with 'replace'.
+    """Make a precise, in-place change within a file.
+
+    Behavior:
+    - Operates only on lines [find_start_line, find_end_line] (1-based, inclusive).
+    - 'find' must appear within that range; only that matched text is replaced.
+    - 'replace' is the full new text for the matched portion; no line numbers.
+    - Content outside the selected range is preserved exactly.
+
+    Guidelines:
+    - Choose the smallest line range that brackets the intended change.
+    - For multiple non-adjacent edits, call this tool multiple times.
+    - Preserve formatting, imports, and surrounding structure.
 
     Args:
-        file_path: The path of the file to edit within the project
-        find: The text to find and replace
-        find_start_line: The start line number where the 'find' text is located (1-based)
-        find_end_line: The end line number where the 'find' text is located (1-based)
-        replace: The text to replace 'find' with
+        file_path: Project-relative file path.
+        find: Exact text to replace within the specified range.
+        find_start_line: Start line (1-based, inclusive).
+        find_end_line: End line (1-based, inclusive).
+        replace: Replacement text (no line numbers).
+    Returns:
+        JSON string describing the edit or an error.
     """
     tool_id = f"tc_{len(ctx.context.events)+1}"
     args = {
@@ -265,10 +292,15 @@ async def edit_code(
 async def request_code_execution(
     ctx: RunContextWrapper[IDEContext], response_on_reject: str
 ) -> str:
-    """Request the UI to execute the current code and provide the output.
+    """Ask the UI to execute code and return output.
+
+    Use when runtime feedback is needed (tests, dev server, script). If execution
+    is not yet available, the run will defer and resume later with the result.
 
     Args:
-        response_on_reject: Message the agent should send if the user rejects executing code.
+        response_on_reject: Fallback message if the user declines execution.
+    Returns:
+        'EXECUTION_REQUESTED' when deferred, or the execution result string when resumed.
     """
     tool_id = f"tc_{len(ctx.context.events)+1}"
     ctx.context.events.append(
@@ -309,11 +341,18 @@ async def request_code_execution(
 async def create_file(
     ctx: RunContextWrapper[IDEContext], file_path: str, content: str
 ) -> str:
-    """Create a new file in the project.
+    """Create a new file with the provided content (for new features or rebuilds).
+
+    Guidelines:
+    - Provide the full file contents. Create siblings/modules as needed.
+    - Prefer small, focused files in idiomatic locations.
+    - Does not overwrite an existing file; returns an error instead. Use rename_* to archive or move old files first.
 
     Args:
-        file_path: The path of the file to create
-        content: The full content of the new file
+        file_path: Project-relative path for the new file.
+        content: Full content of the file.
+    Returns:
+        JSON string describing the creation or an error.
     """
     tool_id = f"tc_{len(ctx.context.events)+1}"
     args = {"file_path": file_path, "content": content}
@@ -355,7 +394,15 @@ async def create_file(
 async def delete_file(
     ctx: RunContextWrapper[IDEContext], file_path: str
 ) -> str:
-    """Delete a file from the project if it exists."""
+    """Delete an existing file (use sparingly; archive first when possible).
+
+    Use with caution. Prefer edits or renames when appropriate. For rebuilds, consider moving old code into a `legacy/` path instead of deleting unless the user insists on removal.
+
+    Args:
+        file_path: Path of the file to remove.
+    Returns:
+        JSON string indicating deletion or an error.
+    """
     tool_id = f"tc_{len(ctx.context.events)+1}"
     args = {"file_path": file_path}
     ctx.context.events.append(
@@ -389,7 +436,18 @@ async def delete_file(
 async def rename_file(
     ctx: RunContextWrapper[IDEContext], old_path: str, new_path: str
 ) -> str:
-    """Rename or move a file from old_path to new_path."""
+    """Rename or move a file.
+
+    Behavior:
+    - Moves content from old_path to new_path; may overwrite if destination exists.
+    - Does not automatically update imports/references; follow up with edit_code().
+
+    Args:
+        old_path: Current file path.
+        new_path: Destination path.
+    Returns:
+        JSON string describing the rename or an error.
+    """
     tool_id = f"tc_{len(ctx.context.events)+1}"
     args = {"old_path": old_path, "new_path": new_path}
     ctx.context.events.append(
@@ -434,7 +492,16 @@ async def rename_file(
 async def create_folder(
     ctx: RunContextWrapper[IDEContext], folder_path: str
 ) -> str:
-    """Declare a new folder in the virtual project (no file creation)."""
+    """Declare a folder in the virtual project (no files created).
+
+    This is a UI-level structure; it does not write files. Fails if a file with
+    the same path exists.
+
+    Args:
+        folder_path: Folder path to declare.
+    Returns:
+        JSON string indicating creation or an error.
+    """
     tool_id = f"tc_{len(ctx.context.events)+1}"
     args = {"folder_path": folder_path}
     ctx.context.events.append(
@@ -469,7 +536,15 @@ async def create_folder(
 async def delete_folder(
     ctx: RunContextWrapper[IDEContext], folder_path: str
 ) -> str:
-    """Delete a folder and any files within it from the project mapping."""
+    """Delete a folder and all files beneath it in the project mapping (for large cleanups only).
+
+    Use with caution; this removes every file under the path. Prefer rename_folder to archive first when possible.
+
+    Args:
+        folder_path: Folder path to remove.
+    Returns:
+        JSON string including count of removed files.
+    """
     tool_id = f"tc_{len(ctx.context.events)+1}"
     args = {"folder_path": folder_path}
     ctx.context.events.append(
@@ -508,7 +583,18 @@ async def delete_folder(
 async def rename_folder(
     ctx: RunContextWrapper[IDEContext], old_path: str, new_path: str
 ) -> str:
-    """Rename or move a folder; updates all files under the folder path."""
+    """Rename or move a folder and all contained files.
+
+    Behavior:
+    - Rewrites affected file paths by replacing prefix old_path with new_path.
+    - Does not update imports or references; follow up with edit_code() as needed.
+
+    Args:
+        old_path: Existing folder path.
+        new_path: New folder path.
+    Returns:
+        JSON string describing the rename.
+    """
     tool_id = f"tc_{len(ctx.context.events)+1}"
     args = {"old_path": old_path, "new_path": new_path}
     ctx.context.events.append(
@@ -574,7 +660,8 @@ def create_ide_agent(model: str | None = None) -> Agent:
     }
     if model:
         try:
-            return Agent(**base_kwargs, model=model)
+            formatted_model = f"litellm/vercel_ai_gateway/{model}"
+            return Agent(**base_kwargs, model=formatted_model)
         except TypeError:
             return Agent(**base_kwargs)
     return Agent(**base_kwargs)

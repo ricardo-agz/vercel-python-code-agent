@@ -245,7 +245,7 @@ function App() {
   const [loading, setLoading] = useState(false);
   const [currentTaskId, setCurrentTaskId] = useState<string | null>(null);
   const [cancelling, setCancelling] = useState(false);
-  const [model, setModel] = useState<string>('openai/gpt-4.1-mini');
+  const [model, setModel] = useState<string>('anthropic/claude-3.5-haiku');
   // Sidebar resizing
   // Track if we're currently processing a code-execution decision
   const [executingCode, setExecutingCode] = useState(false);
