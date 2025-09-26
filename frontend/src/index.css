@@ -1,0 +1,84 @@
+@import "tailwindcss";
+
+:root {
+  /* Typography */
+  font-family: system-ui, Avenir, Helvetica, Arial, sans-serif;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+
+  /* VS Code Dark+ inspired palette */
+  --vscode-bg: #1e1e1e;            /* workbench background */
+  --vscode-sidebar: #252526;       /* side panels */
+  --vscode-panel: #2d2d30;         /* panel/header */
+  --vscode-panel-border: #3e3e42;  /* borders/separators */
+  --vscode-surface: #3c3c3c;       /* tertiary surfaces */
+  --vscode-hover: #4a4a4a;         /* hover */
+  --vscode-contrast: #1f1f22;      /* inputs */
+  --vscode-text: #cccccc;          /* primary text */
+  --vscode-muted: #a0a0a0;         /* muted text */
+  --vscode-subtle: #9f9f9f;        /* subtler text */
+  --vscode-accent: #007acc;        /* primary accent */
+  --vscode-selection: #094771;     /* selection bg */
+  --vscode-success: #16a34a;       /* green-600 */
+  --vscode-danger: #dc2626;        /* red-600 */
+  /* Unified app header height */
+  --header-height: 2.25rem;
+
+  color-scheme: dark;
+  color: var(--vscode-text);
+  background-color: var(--vscode-bg);
+}
+
+/* Light mode fallback (optional) */
+@media (prefers-color-scheme: light) {
+  :root {
+    color-scheme: light;
+    color: #1f2328;
+    background-color: #ffffff;
+  }
+}
+
+/* App chrome */
+html, body, #root {
+  height: 100%;
+}
+body {
+  margin: 0;
+  background: var(--vscode-bg);
+  color: var(--vscode-text);
+}
+
+/* Smooth outlines consistent with VS Code */
+button, input, textarea, select {
+  outline-color: var(--vscode-accent);
+}
+
+/* Scrollbar similar to VS Code */
+*::-webkit-scrollbar {
+  width: 12px;
+  height: 12px;
+}
+*::-webkit-scrollbar-thumb {
+  background: #5a5a5a;
+  border: 3px solid transparent;
+  border-radius: 10px;
+  background-clip: padding-box;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background: #6a6a6a;
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* Ensure Monaco editor fills its flex container and resizes smoothly */
+.monaco-editor,
+.monaco-editor .overflow-guard {
+  position: absolute !important;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: 0;
+}
