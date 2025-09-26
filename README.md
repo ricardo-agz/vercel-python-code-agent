@@ -11,6 +11,15 @@ pnpm run dev
 ```
 
 ### Backend:
+
+#### Setting environment variables
+```
+cat .env.template > .env
+# Set your env variables
+# If you only care about the agent and not remote code execution, only VERCEL_AI_GATEWAY_API_KEY is necessary
+```
+
+#### Running the API
 ```
 cd backend
 python -m venv .venv
