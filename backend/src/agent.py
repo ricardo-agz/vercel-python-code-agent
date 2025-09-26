@@ -30,16 +30,6 @@ We support either:
 
 logger = logging.getLogger("ide_agent.agent")
 
-api_key = os.getenv("AI_GATEWAY_API_KEY") or os.getenv("VERCEL_OIDC_TOKEN")
-base_url = "https://ai-gateway.vercel.sh/v1"
-if not api_key:
-    raise ValueError("AI_GATEWAY_API_KEY or VERCEL_OIDC_TOKEN is not set")
-
-client = AsyncOpenAI(api_key=api_key, base_url=base_url)
-set_default_openai_client(client=client, use_for_tracing=False)
-set_default_openai_api("chat_completions")
-set_tracing_disabled(disabled=True)
-
 
 instructions = """
 You are an IDE assistant that improves code across a multi-file project.
