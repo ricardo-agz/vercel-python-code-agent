@@ -1,6 +1,7 @@
 import base64
 import hashlib
 import os
+import re
 from typing import Any
 
 import httpx
@@ -23,6 +24,15 @@ def _is_production() -> bool:
     return (
         os.getenv("NODE_ENV") or os.getenv("ENV") or "development"
     ).lower() == "production"
+
+
+def _is_allowed_frontend_origin(origin: str | None) -> bool:
+    if not origin:
+        return False
+    if _is_production():
+        return bool(re.match(r"^https://.*\\.labs\\.vercel\\.dev(:\\d+)?$", origin))
+    # In development, allow any origin
+    return True
 
 
 def _b64url(input_bytes: bytes) -> str:
@@ -55,14 +65,6 @@ def _is_relative_url(url: str | None) -> bool:
 
     p = urlparse(url)
     return not p.scheme and not p.netloc and url.startswith("/")
-
-
-def _cors_origins() -> list[str]:
-    cors_origins_env = os.getenv(
-        "CORS_ALLOW_ORIGINS",
-        "http://localhost:5173,http://127.0.0.1:5173,http://10.0.0.99:5173",
-    )
-    return [o.strip() for o in cors_origins_env.split(",") if o.strip()]
 
 
 @router.post("/login")
@@ -109,7 +111,7 @@ def auth_login(req: Request) -> JSONResponse:
     resp.set_cookie("vercel_oauth_code_verifier", verifier, **cookie_args)
     resp.set_cookie("vercel_oauth_redirect_to", redirect_to, **cookie_args)
     frontend_origin = req.headers.get("origin")
-    if frontend_origin and frontend_origin in _cors_origins():
+    if _is_allowed_frontend_origin(frontend_origin):
         resp.set_cookie("vercel_oauth_frontend_origin", frontend_origin, **cookie_args)
     return resp
 
@@ -158,7 +160,7 @@ def auth_login_start(req: Request) -> RedirectResponse:
     resp.set_cookie("vercel_oauth_code_verifier", verifier, **cookie_args)
     resp.set_cookie("vercel_oauth_redirect_to", redirect_to, **cookie_args)
     frontend_origin = req.headers.get("origin")
-    if frontend_origin and frontend_origin in _cors_origins():
+    if _is_allowed_frontend_origin(frontend_origin):
         resp.set_cookie("vercel_oauth_frontend_origin", frontend_origin, **cookie_args)
     return resp
 
@@ -277,7 +279,6 @@ async def auth_me(request: Request) -> dict[str, Any]:
             raw = user_resp.json()
             user_data = raw.get("user") or raw
 
-            # Normalize avatar: prefer full URL; if only a hash is provided, build the URL Vercel serves
             avatar_hash = user_data.get("avatar")
             avatar_url = user_data.get("avatarUrl")
             if not avatar_url and avatar_hash and isinstance(avatar_hash, str):
