@@ -26,19 +26,28 @@ if not logger.handlers:
 
 app = FastAPI()
 
+is_prod = (
+    (os.getenv("NODE_ENV") or os.getenv("ENV") or "development").lower()
+    == "production"
+)
 
-cors_origins_env = os.getenv(
-    "CORS_ALLOW_ORIGINS",
-    "http://localhost:5173,http://127.0.0.1:5173,http://10.0.0.99:5173",
-)
-cors_origins = [o.strip() for o in cors_origins_env.split(",") if o.strip()]
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=cors_origins,
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+if is_prod:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=[],
+        allow_origin_regex=r"^https://.*\.labs\.vercel\.dev(:\d+)?$",
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+else:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"],
+        allow_credentials=False,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
 
 
 app.include_router(models_router)

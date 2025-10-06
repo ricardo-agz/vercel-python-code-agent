@@ -17,6 +17,7 @@ import { AuthModal } from './components/AuthModal';
 import { useAuth } from './context/AuthContext';
 import StatusBar from './components/StatusBar';
 import AccountMenu from './components/AccountMenu';
+import { CodeFixModal } from './components/CodeFixModal';
 
 type ResizableCenterProps = {
   code: string;
@@ -31,9 +32,10 @@ type ResizableCenterProps = {
   onOpenPreview?: () => void;
   terminalLogs: string;
   onClearLogs: () => void;
+  onRequestCodeFix?: (args: { fileName: string; startLine: number; endLine: number; selectedCode: string }) => void;
 };
 
-const ResizableCenter: React.FC<ResizableCenterProps> = ({ code, setCode, proposals, clearProposal, activeFile, onRun, running, onStop, previewUrl, onOpenPreview, terminalLogs, onClearLogs }) => {
+const ResizableCenter: React.FC<ResizableCenterProps> = ({ code, setCode, proposals, clearProposal, activeFile, onRun, running, onStop, previewUrl, onOpenPreview, terminalLogs, onClearLogs, onRequestCodeFix }) => {
   const containerRef = React.useRef<HTMLDivElement>(null);
   const [terminalHeight, setTerminalHeight] = React.useState<number>(200);
   const [resizing, setResizing] = React.useState<boolean>(false);
@@ -95,14 +97,19 @@ const ResizableCenter: React.FC<ResizableCenterProps> = ({ code, setCode, propos
           previewUrl={previewUrl}
           onOpenPreview={onOpenPreview}
           onStatusChange={setStatus}
+          onRequestCodeFix={onRequestCodeFix}
         />
       </div>
-      <div
-        onMouseDown={onMouseDown}
-        className={`h-1 cursor-row-resize transition-colors`}
-        style={{ backgroundColor: resizing ? 'var(--vscode-accent)' : 'var(--vscode-panel-border)', position: 'relative', zIndex: 99999 }}
-      />
-      <TerminalPane height={terminalHeight} logs={terminalLogs} onClear={onClearLogs} />
+      {terminalLogs && terminalLogs.length > 0 ? (
+        <>
+          <div
+            onMouseDown={onMouseDown}
+            className={`h-1 cursor-row-resize transition-colors`}
+            style={{ backgroundColor: resizing ? 'var(--vscode-accent)' : 'var(--vscode-panel-border)', position: 'relative', zIndex: 99999 }}
+          />
+          <TerminalPane height={terminalHeight} logs={terminalLogs} onClear={onClearLogs} />
+        </>
+      ) : null}
       <StatusBar line={status.line} column={status.column} language={status.language} />
       {resizing && (
         <div
@@ -271,6 +278,25 @@ function App() {
 
   // Runs context
   const { runs, runOrder, updateAction } = useRuns();
+  // Code-fix modal state
+  const [codeFix, setCodeFix] = useState<{
+    fileName: string;
+    startLine: number;
+    endLine: number;
+    selectedCode: string;
+  } | null>(null);
+
+  const openCodeFix = React.useCallback((args: { fileName: string; startLine: number; endLine: number; selectedCode: string }) => {
+    setCodeFix(args);
+  }, []);
+
+  const closeCodeFix = React.useCallback(() => setCodeFix(null), []);
+
+  // Declare placeholder for send function; assign later after hook is initialized
+  const submitCodeFixRef = React.useRef<null | ((instruction: string) => Promise<void>)>(null);
+  const submitCodeFix = React.useCallback(async (instruction: string) => {
+    if (submitCodeFixRef.current) await submitCodeFixRef.current(instruction);
+  }, []);
 
   const timelineActions = React.useMemo(() => {
     return runOrder.flatMap(id => runs[id]?.actions || []);
@@ -406,6 +432,21 @@ function App() {
     stream,
     model,
   });
+
+  // Initialize the submitCodeFix callback after sendPrompt is available
+  React.useEffect(() => {
+    submitCodeFixRef.current = async (instruction: string) => {
+      const args = codeFix; // capture current
+      if (!args) return;
+      const systemPrompt = `Please update ${args.fileName} between lines ${args.startLine}-${args.endLine} according to the user's instruction. Only make minimal, precise edits within that range using the edit_code tool. Preserve style and indentation. Selected code snippet for reference (do not paste with line numbers):\n\n${args.selectedCode}`;
+      setInput(`${instruction}\n\n${systemPrompt}`);
+      setCodeFix(null);
+      if (!loading) {
+        if (!isAuthenticated) { openModal(); return; }
+        await sendPrompt();
+      }
+    };
+  }, [codeFix, setInput, loading, isAuthenticated, openModal, sendPrompt]);
   const handleRun = React.useCallback(() => {
     const merged: Record<string, string> = { ...project };
     // If a proposal exists for active file and is visible, prefer current editor content via code state
@@ -724,6 +765,8 @@ function App() {
           onOpenPreview={play.openPreview}
           terminalLogs={play.logs}
           onClearLogs={play.clear}
+        // When editor requests a code fix open modal
+        onRequestCodeFix={openCodeFix}
         />
       )}
       right={(
@@ -772,6 +815,15 @@ function App() {
     />
     <AuthModal />
     <AccountMenu />
+    <CodeFixModal
+      visible={!!codeFix}
+      fileName={codeFix?.fileName || ''}
+      startLine={codeFix?.startLine || 0}
+      endLine={codeFix?.endLine || 0}
+      selectedCode={codeFix?.selectedCode || ''}
+      onClose={closeCodeFix}
+      onSubmit={submitCodeFix}
+    />
     </>
   );
 }

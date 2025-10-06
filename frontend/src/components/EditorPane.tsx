@@ -18,6 +18,8 @@ interface EditorPaneProps {
   previewUrl?: string | null;
   onOpenPreview?: () => void;
   onStatusChange?: (status: { line: number; column: number; language: string }) => void;
+  // Triggered when user presses Cmd/Ctrl+K with a non-empty selection
+  onRequestCodeFix?: (args: { fileName: string; startLine: number; endLine: number; selectedCode: string }) => void;
 }
 
 export const EditorPane: React.FC<EditorPaneProps> = ({
@@ -33,6 +35,7 @@ export const EditorPane: React.FC<EditorPaneProps> = ({
   previewUrl = null,
   onOpenPreview,
   onStatusChange,
+  onRequestCodeFix,
 }) => {
   const diffEditorRef = React.useRef<DiffEditorRef>(null);
   const editorRef = React.useRef<monaco.editor.IStandaloneCodeEditor | null>(null);
@@ -307,6 +310,29 @@ export const EditorPane: React.FC<EditorPaneProps> = ({
               update();
               editorInstance.onDidChangeCursorPosition(update);
               editorInstance.onDidFocusEditorText(update);
+              // Register Cmd/Ctrl+K to open Code Fix modal for current selection
+              try {
+                const ed = editorInstance as unknown as monaco.editor.IStandaloneCodeEditor;
+                const keybinding = monacoInstance ? [monacoInstance.KeyMod.CtrlCmd | monacoInstance.KeyCode.KeyK] : undefined;
+                ed.addAction({
+                  id: 'codefix.open',
+                  label: 'Fix selected code (AI)',
+                  keybindings: keybinding as number[] | undefined,
+                  precondition: 'textInputFocus',
+                  run: (codeEditor: monaco.editor.ICodeEditor) => {
+                    const model = codeEditor.getModel();
+                    const sel = codeEditor.getSelection();
+                    if (!model || !sel) return;
+                    const text = model.getValueInRange(sel);
+                    if (!text || !String(text).trim()) return;
+                    const startLine = sel.startLineNumber;
+                    const endLine = sel.endLineNumber;
+                    onRequestCodeFix?.({ fileName, startLine, endLine, selectedCode: String(text) });
+                  },
+                });
+              } catch {
+                // noop
+              }
             }}
             options={{
               minimap: { enabled: false },
