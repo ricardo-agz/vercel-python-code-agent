@@ -25,13 +25,9 @@ repository = "https://example.com/repo"
 
 
 [tool.hatch.build.targets.wheel]
-# Explicitly include flat-module backend files so Hatch can build the wheel
+# Include the src package so Hatch can build the wheel after refactor
 only-include = [
-  "agent.py",
-  "auth.py",
-  "server.py",
-  "sse.py",
-  "__init__.py",
+  "src",
 ]
 
 

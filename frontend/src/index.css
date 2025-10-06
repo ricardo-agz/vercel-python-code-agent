@@ -8,23 +8,25 @@
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 
-  /* VS Code Dark+ inspired palette */
-  --vscode-bg: #1e1e1e;            /* workbench background */
-  --vscode-sidebar: #252526;       /* side panels */
-  --vscode-panel: #2d2d30;         /* panel/header */
-  --vscode-panel-border: #3e3e42;  /* borders/separators */
-  --vscode-surface: #3c3c3c;       /* tertiary surfaces */
-  --vscode-hover: #4a4a4a;         /* hover */
-  --vscode-contrast: #1f1f22;      /* inputs */
-  --vscode-text: #cccccc;          /* primary text */
-  --vscode-muted: #a0a0a0;         /* muted text */
-  --vscode-subtle: #9f9f9f;        /* subtler text */
-  --vscode-accent: #007acc;        /* primary accent */
-  --vscode-selection: #094771;     /* selection bg */
-  --vscode-success: #16a34a;       /* green-600 */
-  --vscode-danger: #dc2626;        /* red-600 */
+  /* Vercel-inspired dark palette */
+  --vscode-bg: #0a0a0a;            /* app background (near-black) */
+  --vscode-sidebar: #0d0d0d;       /* side panels */
+  --vscode-panel: #0f0f0f;         /* panel/header */
+  --vscode-panel-border: #1a1a1a;  /* borders/separators */
+  --vscode-surface: #111111;       /* tertiary surfaces */
+  --vscode-hover: #161616;         /* hover */
+  --vscode-contrast: #0c0c0c;      /* inputs */
+  --vscode-text: #e6e6e6;          /* primary text */
+  --vscode-muted: #a1a1a1;         /* muted text */
+  --vscode-subtle: #8a8a8a;        /* subtler text */
+  --vscode-accent: #0070f3;        /* brand accent */
+  --vscode-selection: #0b2a6b;     /* selection bg */
+  --vscode-success: #10b981;       /* emerald-500 */
+  --vscode-danger: #ef4444;        /* red-500 */
   /* Unified app header height */
   --header-height: 2.25rem;
+  /* Status bar height */
+  --statusbar-height: 26px;
 
   color-scheme: dark;
   color: var(--vscode-text);
@@ -61,13 +63,13 @@ button, input, textarea, select {
   height: 12px;
 }
 *::-webkit-scrollbar-thumb {
-  background: #5a5a5a;
+  background: #262626;
   border: 3px solid transparent;
   border-radius: 10px;
   background-clip: padding-box;
 }
 *::-webkit-scrollbar-thumb:hover {
-  background: #6a6a6a;
+  background: #2f2f2f;
 }
 *::-webkit-scrollbar-track {
   background: transparent;
@@ -81,4 +83,15 @@ button, input, textarea, select {
   right: 0;
   bottom: 0;
   left: 0;
+}
+
+/* Subtle blue shimmer for FastAPI entrypoint Run button */
+@keyframes shimmer {
+  0% { box-shadow: 0 0 0 0 rgba(0, 112, 243, 0.4); }
+  70% { box-shadow: 0 0 0 8px rgba(0, 112, 243, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(0, 112, 243, 0); }
+}
+
+.shimmer {
+  animation: shimmer 1.8s ease-out infinite;
 }

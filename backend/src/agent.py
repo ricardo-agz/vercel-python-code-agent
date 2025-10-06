@@ -83,7 +83,9 @@ def display_code_with_line_numbers(code: str) -> str:
 
 
 def build_project_input(
-    query: str, project: dict[str, str], prior_assistant_messages: list[Any] | None = None
+    query: str,
+    project: dict[str, str],
+    prior_assistant_messages: list[Any] | None = None,
 ) -> str:
     """Render a multi-file project into a single prompt-friendly string.
 
@@ -92,7 +94,10 @@ def build_project_input(
     prior_block = ""
     if prior_assistant_messages:
         # Accept either list[str] (legacy assistant-only) or list[dict{role,content}] (full dialogue)
-        if isinstance(prior_assistant_messages[0] if len(prior_assistant_messages) > 0 else None, dict):
+        if isinstance(
+            prior_assistant_messages[0] if len(prior_assistant_messages) > 0 else None,
+            dict,
+        ):
             lines: list[str] = []
             for m in prior_assistant_messages:  # type: ignore[assignment]
                 role = str(m.get("role", ""))
@@ -102,7 +107,9 @@ def build_project_input(
                 lines.append(f"- {role}: {content}")
             if lines:
                 prior_block = (
-                    "\n---\nPrevious conversation (for context):\n" + "\n".join(lines) + "\n"
+                    "\n---\nPrevious conversation (for context):\n"
+                    + "\n".join(lines)
+                    + "\n"
                 )
         else:
             joined = "\n\n".join([f"- {m}" for m in prior_assistant_messages])
@@ -380,10 +387,9 @@ async def create_file(
 # File/folder FS operations
 # -------------------------
 
+
 @function_tool
-async def delete_file(
-    ctx: RunContextWrapper[IDEContext], file_path: str
-) -> str:
+async def delete_file(ctx: RunContextWrapper[IDEContext], file_path: str) -> str:
     """Delete an existing file (use sparingly; archive first when possible).
 
     Use with caution. Prefer edits or renames when appropriate. For rebuilds, consider moving old code into a `legacy/` path instead of deleting unless the user insists on removal.
@@ -450,7 +456,11 @@ async def rename_file(
     )
 
     if old_path not in ctx.context.project:
-        output = {"error": f"File not found: {old_path}", "old_path": old_path, "new_path": new_path}
+        output = {
+            "error": f"File not found: {old_path}",
+            "old_path": old_path,
+            "new_path": new_path,
+        }
     else:
         content = ctx.context.project[old_path]
         overwritten = new_path in ctx.context.project
@@ -479,9 +489,7 @@ async def rename_file(
 
 
 @function_tool
-async def create_folder(
-    ctx: RunContextWrapper[IDEContext], folder_path: str
-) -> str:
+async def create_folder(ctx: RunContextWrapper[IDEContext], folder_path: str) -> str:
     """Declare a folder in the virtual project (no files created).
 
     This is a UI-level structure; it does not write files. Fails if a file with
@@ -507,7 +515,10 @@ async def create_folder(
     # But validate that it does not conflict with existing file
     conflict = folder_path in ctx.context.project
     if conflict:
-        output = {"error": f"Conflicts with existing file: {folder_path}", "folder_path": folder_path}
+        output = {
+            "error": f"Conflicts with existing file: {folder_path}",
+            "folder_path": folder_path,
+        }
     else:
         output = {"folder_path": folder_path, "created": True}
 
@@ -523,9 +534,7 @@ async def create_folder(
 
 
 @function_tool
-async def delete_folder(
-    ctx: RunContextWrapper[IDEContext], folder_path: str
-) -> str:
+async def delete_folder(ctx: RunContextWrapper[IDEContext], folder_path: str) -> str:
     """Delete a folder and all files beneath it in the project mapping (for large cleanups only).
 
     Use with caution; this removes every file under the path. Prefer rename_folder to archive first when possible.
@@ -602,7 +611,7 @@ async def rename_folder(
     next_project: dict[str, str] = {}
     for path, content in ctx.context.project.items():
         if path == old_norm or path.startswith(old_norm + "/"):
-            suffix = path[len(old_norm):]
+            suffix = path[len(old_norm) :]
             new_file_path = (new_norm + suffix).lstrip("/")
             next_project[new_file_path] = content
             moved += 1
@@ -626,6 +635,7 @@ async def rename_folder(
         }
     )
     return json.dumps(output)
+
 
 def create_ide_agent(model: str | None = None) -> Agent:
     """Factory to construct the IDE Agent with an optional model override.

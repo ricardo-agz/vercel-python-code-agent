@@ -1,4 +1,5 @@
 import { useCallback } from 'react';
+import { useAuth } from '../context/AuthContext';
 import type { Action } from '../types/run';
 import { useRuns } from '../context/RunContext';
 import { API_BASE } from '../constants';
@@ -32,9 +33,14 @@ export const useChat = ({
   stream,
   model,
 }: UseChatProps) => {
+  const { isAuthenticated, openModal } = useAuth();
   const { runs, runOrder, createRun, addAction, updateAction } = useRuns();
   const sendPrompt = useCallback(async () => {
     if (!input.trim()) return;
+    if (!isAuthenticated) {
+      openModal();
+      return;
+    }
     setLoading(true);
     setInput('');
 
@@ -89,7 +95,7 @@ export const useChat = ({
       console.error('enqueue failed');
       setLoading(false);
     }
-  }, [input, userId, project, proposals, setInput, setLoading, createRun, addAction, setCurrentTaskId, runs, runOrder, stream, model]);
+  }, [input, isAuthenticated, openModal, userId, project, proposals, setInput, setLoading, createRun, addAction, setCurrentTaskId, runs, runOrder, stream, model]);
 
   const cancelCurrentTask = useCallback(() => {
     if (!currentTaskId || cancelling) return;

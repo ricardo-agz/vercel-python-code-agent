@@ -1,5 +1,6 @@
 import { useCallback, useMemo, useRef, useState } from 'react';
 import { API_BASE } from '../constants';
+import { useAuth } from '../context/AuthContext';
 
 export type PlayStatus = 'idle' | 'starting' | 'running' | 'error' | 'done';
 
@@ -18,6 +19,7 @@ type StartArgs = {
 };
 
 export function usePlay() {
+  const { isAuthenticated, openModal } = useAuth();
   const [status, setStatus] = useState<PlayStatus>('idle');
   const [logs, setLogs] = useState<string>('');
   const sourceRef = useRef<EventSource | null>(null);
@@ -39,6 +41,10 @@ export function usePlay() {
   const clear = useCallback(() => setLogs(''), []);
 
   const start = useCallback(async (args: StartArgs) => {
+    if (!isAuthenticated) {
+      openModal();
+      return;
+    }
     // Cooldown: if we just stopped a session, wait a bit to avoid race with sandbox teardown
     if (status === 'done' || status === 'error') {
       await new Promise((r) => setTimeout(r, 150));
@@ -140,7 +146,7 @@ export function usePlay() {
       setStreamToken(null);
       setSandboxId(null);
     };
-  }, [apiOrigin, status]);
+  }, [apiOrigin, status, isAuthenticated, openModal]);
 
   const stop = useCallback(async () => {
     const es = sourceRef.current;

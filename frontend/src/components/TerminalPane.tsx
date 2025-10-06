@@ -8,6 +8,8 @@ interface TerminalPaneProps {
 }
 
 export const TerminalPane: React.FC<TerminalPaneProps> = ({ title = 'Terminal', height = 200, logs, onClear }) => {
+  const promptSymbol = '$';
+  const content = logs && logs.length > 0 ? logs : `${promptSymbol} waiting for output...\n${promptSymbol} `;
   return (
     <div className="flex flex-col" style={{ height: `${height}px`, borderTop: '1px solid var(--vscode-panel-border)', backgroundColor: 'var(--vscode-bg)' }}>
       <div className="px-3 flex items-center justify-between" style={{ backgroundColor: 'var(--vscode-panel)', borderBottom: '1px solid var(--vscode-panel-border)', height: 'var(--header-height)' }}>
@@ -17,7 +19,7 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({ title = 'Terminal', 
         </div>
       </div>
       <div className="flex-1 overflow-auto">
-        <pre className="p-3 text-xs whitespace-pre-wrap font-mono" style={{ color: '#d4d4d4' }}>{logs && logs.length > 0 ? logs : `# Logs will appear here...`}</pre>
+        <pre className="p-3 text-xs whitespace-pre-wrap font-mono" style={{ color: '#d4d4d4' }}>{content}</pre>
       </div>
     </div>
   );

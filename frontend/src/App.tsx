@@ -13,6 +13,10 @@ import ThreePane from './components/ThreePane';
 import { FileTree } from './components/FileTree';
 import { TerminalPane } from './components/TerminalPane';
 import { usePlay } from './hooks/usePlay';
+import { AuthModal } from './components/AuthModal';
+import { useAuth } from './context/AuthContext';
+import StatusBar from './components/StatusBar';
+import AccountMenu from './components/AccountMenu';
 
 type ResizableCenterProps = {
   code: string;
@@ -33,6 +37,7 @@ const ResizableCenter: React.FC<ResizableCenterProps> = ({ code, setCode, propos
   const containerRef = React.useRef<HTMLDivElement>(null);
   const [terminalHeight, setTerminalHeight] = React.useState<number>(200);
   const [resizing, setResizing] = React.useState<boolean>(false);
+  const [status, setStatus] = React.useState<{ line: number; column: number; language: string }>({ line: 1, column: 1, language: 'plaintext' });
 
   const minTerminalHeight = 120;
   const minEditorHeight = 120;
@@ -89,6 +94,7 @@ const ResizableCenter: React.FC<ResizableCenterProps> = ({ code, setCode, propos
           running={running}
           previewUrl={previewUrl}
           onOpenPreview={onOpenPreview}
+          onStatusChange={setStatus}
         />
       </div>
       <div
@@ -97,6 +103,7 @@ const ResizableCenter: React.FC<ResizableCenterProps> = ({ code, setCode, propos
         style={{ backgroundColor: resizing ? 'var(--vscode-accent)' : 'var(--vscode-panel-border)', position: 'relative', zIndex: 99999 }}
       />
       <TerminalPane height={terminalHeight} logs={terminalLogs} onClear={onClearLogs} />
+      <StatusBar line={status.line} column={status.column} language={status.language} />
       {resizing && (
         <div
           className="fixed inset-0"
@@ -221,6 +228,7 @@ const USER_ID = `user_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
 function App() {
   // Sandbox play hook for remote execution
   const play = usePlay();
+  const { isAuthenticated, user, openModal } = useAuth();
 
   // Project: mapping of file path -> content
   const [project, setProject] = useState<Record<string, string>>(STARTER_PROJECT);
@@ -245,7 +253,7 @@ function App() {
   const [loading, setLoading] = useState(false);
   const [currentTaskId, setCurrentTaskId] = useState<string | null>(null);
   const [cancelling, setCancelling] = useState(false);
-  const [model, setModel] = useState<string>('anthropic/claude-3.5-haiku');
+  const [model, setModel] = useState<string>('anthropic/claude-sonnet-4.5');
   // Sidebar resizing
   // Track if we're currently processing a code-execution decision
   const [executingCode, setExecutingCode] = useState(false);
@@ -413,6 +421,7 @@ function App() {
 
   const handleSendMessage = async () => {
     if (!input.trim() || loading) return;
+    if (!isAuthenticated) { openModal(); return; }
     await sendPrompt();
   };
 
@@ -520,6 +529,7 @@ function App() {
   };
 
   return (
+    <>
     <ThreePane
       left={(
         <FileTree
@@ -741,10 +751,28 @@ function App() {
             showCancel={!!currentTaskId}
             onCancel={handleCancelTask}
             cancelling={cancelling}
+            suggestions={
+              timelineActions.length === 0
+                ? [
+                    'Add a FastAPI /todos API with in-memory CRUD (GET, POST, DELETE) and run',
+                    'Implement /math/fibonacci?n=20 that returns the sequence as JSON and run',
+                    'Add request logging middleware plus /health and /time endpoints and run',
+                    'Create a /text/wordcount endpoint that accepts text in JSON and returns counts and run',
+                  ]
+                : undefined
+            }
           />
+          <div className="px-4 py-2 text-xs text-gray-500">
+            {isAuthenticated ? (
+              <span>Signed in{user?.username ? ` as @${user.username}` : ''}</span>
+            ) : null}
+          </div>
         </>
       )}
     />
+    <AuthModal />
+    <AccountMenu />
+    </>
   );
 }
 

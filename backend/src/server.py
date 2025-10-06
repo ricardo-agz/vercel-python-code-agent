@@ -1,0 +1,57 @@
+import os
+import logging
+from dotenv import load_dotenv
+
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+
+from src.api.agent import router as agent_router
+from src.api.sandbox import router as sandbox_router
+from src.api.models import router as models_router
+from src.api.auth_routes import router as auth_router
+
+here = os.path.dirname(os.path.abspath(__file__))
+
+try:
+    root = os.path.dirname(here)
+    load_dotenv(os.path.join(root, ".env"), override=False)
+except Exception:
+    pass
+
+
+logger = logging.getLogger("ide_agent.server")
+if not logger.handlers:
+    logger.setLevel(logging.INFO)
+
+
+app = FastAPI()
+
+
+cors_origins_env = os.getenv(
+    "CORS_ALLOW_ORIGINS",
+    "http://localhost:5173,http://127.0.0.1:5173,http://10.0.0.99:5173",
+)
+cors_origins = [o.strip() for o in cors_origins_env.split(",") if o.strip()]
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=cors_origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+app.include_router(models_router)
+app.include_router(auth_router)
+app.include_router(agent_router)
+app.include_router(sandbox_router)
+
+@app.get("/")
+def read_root():
+    return {"Hello": "IDE Agent"}
+
+
+if __name__ == "__main__":
+    import uvicorn
+
+    uvicorn.run("src.server:app", host="0.0.0.0", port=8081, factory=False)

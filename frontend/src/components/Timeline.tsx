@@ -51,11 +51,11 @@ export const Timeline: React.FC<TimelineProps> = ({ actions, isEmpty, loading })
                 const open = Boolean(expanded[action.id]);
                 return (
                   <div key={key} className="mr-4">
-                    <div className="relative rounded" style={{ background: '#1b1b1b', border: '1px solid var(--vscode-panel-border)' }}>
+                    <div className="relative rounded" style={{ background: 'var(--vscode-bg)', border: '1px solid var(--vscode-panel-border)' }}>
                       <pre
                         className="p-3 text-xs whitespace-pre-wrap font-mono"
                         style={{
-                          color: '#d4d4d4',
+                          color: 'var(--vscode-text)',
                           maxHeight: !open && long ? '200px' : undefined,
                           overflow: !open && long ? 'hidden' : 'auto',
                         }}
@@ -66,7 +66,7 @@ export const Timeline: React.FC<TimelineProps> = ({ actions, isEmpty, loading })
                         <div
                           className="absolute left-0 right-0"
                           style={{ bottom: '36px', height: '48px',
-                            background: 'linear-gradient(180deg, rgba(27,27,27,0) 0%, rgba(27,27,27,1) 80%)' }}
+                            background: 'linear-gradient(180deg, rgba(15,15,15,0) 0%, rgba(15,15,15,1) 80%)' }}
                         />
                       )}
                       {long && (
