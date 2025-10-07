@@ -1,14 +1,13 @@
 import os
 import logging
 from dotenv import load_dotenv
-
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from src.api.agent import router as agent_router
 from src.api.sandbox import router as sandbox_router
 from src.api.models import router as models_router
-from src.api.auth_routes import router as auth_router
+from src.api.auth import router as auth_router
 
 here = os.path.dirname(os.path.abspath(__file__))
 
