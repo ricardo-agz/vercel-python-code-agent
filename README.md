@@ -1,5 +1,5 @@
 ### You can now run a Python FastAPI app inside a Vercel sandbox from the sandboxes Python SDK running on FastAPI in Vercel:
-https://vercel-python-code-agent-front.vercel.app/
+https://python-vibe-coding-ide-blush.labs.vercel.dev/
 
 ![Preview](assets/preview.png)
 
