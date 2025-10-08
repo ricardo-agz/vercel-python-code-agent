@@ -18,6 +18,7 @@ import { useAuth } from './context/AuthContext';
 import StatusBar from './components/StatusBar';
 import AccountMenu from './components/AccountMenu';
 import { CodeFixModal } from './components/CodeFixModal';
+import { API_BASE } from './constants';
 
 type ResizableCenterProps = {
   code: string;
@@ -266,6 +267,7 @@ function App() {
   const [executingCode, setExecutingCode] = useState(false);
   // Track which execution action is currently being processed so we can show a loader
   const [executionAction, setExecutionAction] = useState<'accept' | 'reject' | null>(null);
+  const [inlineFixLoading, setInlineFixLoading] = useState<boolean>(false);
 
   // Track a pending exec approval that should resume the agent after sandbox completes
   const [pendingExecResume, setPendingExecResume] = useState<{
@@ -291,6 +293,12 @@ function App() {
   }, []);
 
   const closeCodeFix = React.useCallback(() => setCodeFix(null), []);
+
+  // Close inline edit modal on file switch
+  React.useEffect(() => {
+    setCodeFix(null);
+    setInlineFixLoading(false);
+  }, [activeFile]);
 
   // Declare placeholder for send function; assign later after hook is initialized
   const submitCodeFixRef = React.useRef<null | ((instruction: string) => Promise<void>)>(null);
@@ -433,20 +441,42 @@ function App() {
     model,
   });
 
-  // Initialize the submitCodeFix callback after sendPrompt is available
+  // Initialize the submitCodeFix callback to hit inline-fix API and propose changes
   React.useEffect(() => {
     submitCodeFixRef.current = async (instruction: string) => {
       const args = codeFix; // capture current
       if (!args) return;
-      const systemPrompt = `Please update ${args.fileName} between lines ${args.startLine}-${args.endLine} according to the user's instruction. Only make minimal, precise edits within that range using the edit_code tool. Preserve style and indentation. Selected code snippet for reference (do not paste with line numbers):\n\n${args.selectedCode}`;
-      setInput(`${instruction}\n\n${systemPrompt}`);
-      setCodeFix(null);
-      if (!loading) {
-        if (!isAuthenticated) { openModal(); return; }
-        await sendPrompt();
+      try {
+        setInlineFixLoading(true);
+        const res = await fetch(`${API_BASE}/inline-fix`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify({
+            user_id: USER_ID,
+            project,
+            file_path: args.fileName,
+            start_line: args.startLine,
+            end_line: args.endLine,
+            instruction,
+            selected_code: args.selectedCode,
+            model,
+          }),
+        });
+        const data = await res.json();
+        if (res.ok && data.ok && data.file_path && typeof data.new_file_content === 'string') {
+          upsertProposal(data.file_path as string, data.new_file_content as string);
+        } else {
+          console.error('inline-fix failed', data?.error || res.statusText);
+        }
+      } catch (e) {
+        console.error('inline-fix error', e);
+      } finally {
+        setCodeFix(null);
+        setInlineFixLoading(false);
       }
     };
-  }, [codeFix, setInput, loading, isAuthenticated, openModal, sendPrompt]);
+  }, [codeFix, project, model, upsertProposal]);
   const handleRun = React.useCallback(() => {
     const merged: Record<string, string> = { ...project };
     // If a proposal exists for active file and is visible, prefer current editor content via code state
@@ -822,7 +852,17 @@ function App() {
       endLine={codeFix?.endLine || 0}
       selectedCode={codeFix?.selectedCode || ''}
       onClose={closeCodeFix}
-      onSubmit={submitCodeFix}
+      onSubmit={async (instruction, modelOverride) => {
+        // temporarily override model for this request only
+        const previous = model;
+        if (modelOverride) setModel(modelOverride);
+        setLoading(true);
+        await submitCodeFix(instruction);
+        setLoading(false);
+        if (modelOverride) setModel(previous);
+      }}
+      currentModel={model}
+      loading={inlineFixLoading}
     />
     </>
   );

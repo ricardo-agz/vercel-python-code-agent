@@ -1,10 +1,11 @@
 import os
 from typing import Any
 import httpx
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
+from src.api.auth import require_vercel_user
 
 
-router = APIRouter(prefix="/api", tags=["models"])
+router = APIRouter(prefix="/api", tags=["models"], dependencies=[Depends(require_vercel_user)])
 
 
 ALLOWED_MODELS: list[str] = [

@@ -6,7 +6,7 @@ import uuid
 from typing import Any, AsyncGenerator
 
 from pydantic import BaseModel
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
 
 from agents import Runner
@@ -19,12 +19,15 @@ from src.sse import (
     tool_started_sse,
     tool_completed_sse,
 )
+from src.api.auth import require_vercel_user
 
 
 logger = logging.getLogger("ide_agent.api.runs")
 
 
-router = APIRouter(prefix="/api/runs", tags=["runs"])
+router = APIRouter(
+    prefix="/api/runs", tags=["runs"], dependencies=[Depends(require_vercel_user)]
+)
 
 
 ALLOWED_TURNS = 30

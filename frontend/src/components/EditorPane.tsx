@@ -203,6 +203,41 @@ export const EditorPane: React.FC<EditorPaneProps> = ({
     }
   }, [language, onStatusChange]);
 
+  // Global shortcuts for accepting/rejecting proposed changes
+  React.useEffect(() => {
+    if (proposedContent === null) return;
+    const handler = (e: KeyboardEvent) => {
+      const isCmd = e.metaKey || e.ctrlKey;
+      const key = (e.key || '').toLowerCase();
+      const isAccept = isCmd && key === 'y';
+      const isReject = (isCmd && key === '.') || key === 'escape';
+      if (!isAccept && !isReject) return;
+      // ignore when typing in inputs/textareas/contentEditable unless editor has focus
+      const active = document.activeElement as HTMLElement | null;
+      const tag = (active?.tagName || '').toLowerCase();
+      const typing = Boolean(active && (tag === 'input' || tag === 'textarea' || active.isContentEditable));
+      const editorHasFocus = Boolean(
+        diffEditorRef.current?.getModifiedEditor?.()?.hasTextFocus?.() ||
+        editorRef.current?.hasTextFocus?.()
+      );
+      if (typing && !editorHasFocus) return;
+      e.preventDefault();
+      e.stopPropagation();
+      if (isAccept) {
+        if (diffEditorRef.current) {
+          const updated = diffEditorRef.current.getModifiedEditor().getValue();
+          onAcceptProposal(updated);
+        } else {
+          onAcceptProposal(proposedContent);
+        }
+      } else if (isReject) {
+        onRejectProposal();
+      }
+    };
+    window.addEventListener('keydown', handler, true);
+    return () => window.removeEventListener('keydown', handler, true);
+  }, [proposedContent, onAcceptProposal, onRejectProposal]);
+
   return (
     <div className="flex-1 flex flex-col" style={{ width: '100%' }}>
       <div className="px-3 flex items-center justify-between" style={{ backgroundColor: 'var(--vscode-panel)', borderBottom: '1px solid var(--vscode-panel-border)', height: 'var(--header-height)' }}>
@@ -310,25 +345,30 @@ export const EditorPane: React.FC<EditorPaneProps> = ({
               update();
               editorInstance.onDidChangeCursorPosition(update);
               editorInstance.onDidFocusEditorText(update);
-              // Register Cmd/Ctrl+K to open Code Fix modal for current selection
+              // Global capture: handle Cmd/Ctrl+K reliably
               try {
-                const ed = editorInstance as unknown as monaco.editor.IStandaloneCodeEditor;
-                const keybinding = monacoInstance ? [monacoInstance.KeyMod.CtrlCmd | monacoInstance.KeyCode.KeyK] : undefined;
-                ed.addAction({
-                  id: 'codefix.open',
-                  label: 'Fix selected code (AI)',
-                  keybindings: keybinding as number[] | undefined,
-                  precondition: 'textInputFocus',
-                  run: (codeEditor: monaco.editor.ICodeEditor) => {
-                    const model = codeEditor.getModel();
-                    const sel = codeEditor.getSelection();
-                    if (!model || !sel) return;
-                    const text = model.getValueInRange(sel);
-                    if (!text || !String(text).trim()) return;
-                    const startLine = sel.startLineNumber;
-                    const endLine = sel.endLineNumber;
-                    onRequestCodeFix?.({ fileName, startLine, endLine, selectedCode: String(text) });
-                  },
+                const keyHandler = (e: KeyboardEvent) => {
+                  const isCmdOrCtrlK = (e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey && (e.key === 'k' || e.key === 'K');
+                  if (!isCmdOrCtrlK) return;
+                  const ed = editorInstance as unknown as monaco.editor.IStandaloneCodeEditor;
+                  const hasFocus = ed.hasTextFocus?.();
+                  if (!hasFocus) return;
+                  const model = ed.getModel?.();
+                  if (!model) return;
+                  const sel = ed.getSelection?.();
+                  const startLine = sel?.startLineNumber ?? ed.getPosition()?.lineNumber ?? 1;
+                  const endLine = sel?.endLineNumber ?? startLine;
+                  let selectedText = sel ? model.getValueInRange(sel) : '';
+                  if (!selectedText || !String(selectedText).trim()) {
+                    selectedText = model.getLineContent(startLine);
+                  }
+                  e.preventDefault();
+                  e.stopPropagation();
+                  onRequestCodeFix?.({ fileName, startLine, endLine, selectedCode: String(selectedText) });
+                };
+                window.addEventListener('keydown', keyHandler, true);
+                (editorInstance as unknown as monaco.editor.IStandaloneCodeEditor).onDidDispose?.(() => {
+                  window.removeEventListener('keydown', keyHandler, true);
                 });
               } catch {
                 // noop

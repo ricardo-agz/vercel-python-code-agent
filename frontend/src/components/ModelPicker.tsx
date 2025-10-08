@@ -19,7 +19,7 @@ export const ModelPicker: React.FC<ModelPickerProps> = ({ value, onChange }) => 
       setLoading(true);
       setError(null);
       try {
-        const res = await fetch(`${API_BASE}/models`);
+        const res = await fetch(`${API_BASE}/models`, { credentials: 'include' });
         if (!res.ok) throw new Error(`Failed to load models (${res.status})`);
         const data: ModelsResponse = await res.json();
         const list = Array.isArray(data.models) ? data.models : [];

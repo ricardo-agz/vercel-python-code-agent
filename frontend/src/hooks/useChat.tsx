@@ -59,6 +59,7 @@ export const useChat = ({
     const res = await fetch(`${API_BASE}/runs`, {
       method : 'POST',
       headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
       body   : JSON.stringify({
         user_id : userId,
         query   : input,

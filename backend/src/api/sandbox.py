@@ -3,7 +3,7 @@ import os
 from typing import Any, AsyncGenerator
 
 from pydantic import BaseModel
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
 
 from vercel.sandbox import Sandbox
@@ -14,9 +14,10 @@ from src.sse import (
     sse_format,
     emit_event,
 )
+from src.api.auth import require_vercel_user
 
 
-router = APIRouter(prefix="/api/play", tags=["play"])
+router = APIRouter(prefix="/api/play", tags=["play"], dependencies=[Depends(require_vercel_user)])
 
 
 class PlayRequest(BaseModel):

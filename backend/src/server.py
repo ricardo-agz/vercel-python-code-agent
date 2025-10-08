@@ -7,6 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from src.api.agent import router as agent_router
 from src.api.sandbox import router as sandbox_router
 from src.api.models import router as models_router
+from src.api.inline_fix import router as inline_fix_router
 from src.api.auth import router as auth_router
 
 here = os.path.dirname(os.path.abspath(__file__))
@@ -44,6 +45,7 @@ app.include_router(models_router)
 app.include_router(auth_router)
 app.include_router(agent_router)
 app.include_router(sandbox_router)
+app.include_router(inline_fix_router)
 
 @app.get("/")
 def read_root():

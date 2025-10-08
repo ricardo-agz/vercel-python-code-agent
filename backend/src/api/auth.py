@@ -4,12 +4,14 @@ import os
 import re
 import traceback
 import logging
+import time
+import secrets
 from typing import Any
 
 import httpx
-from fastapi import APIRouter, Request
-from fastapi import HTTPException
+from fastapi import APIRouter, Request, HTTPException, Depends
 from fastapi.responses import JSONResponse, RedirectResponse, Response
+ 
 
 
 logger = logging.getLogger(__name__)
@@ -45,8 +47,6 @@ def _b64url(input_bytes: bytes) -> str:
 
 
 def _generate_code_verifier() -> str:
-    import secrets
-
     return _b64url(secrets.token_bytes(32))
 
 
@@ -68,6 +68,70 @@ def _is_relative_url(url: str | None) -> bool:
 
     p = urlparse(url)
     return not p.scheme and not p.netloc and url.startswith("/")
+
+
+# --- Session verification helpers & dependency ---
+
+_SESSION_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
+_SESSION_CACHE_TTL_SECONDS = int(os.getenv("VERCEL_SESSION_CACHE_TTL", "60"))
+
+
+async def _fetch_vercel_user(access_token: str) -> dict[str, Any]:
+    now = time.time()
+    cached = _SESSION_CACHE.get(access_token)
+    if cached and cached[0] > now:
+        return cached[1]
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(
+                "https://api.vercel.com/v2/user",
+                headers={"Authorization": f"Bearer {access_token}"},
+            )
+            resp.raise_for_status()
+            raw = resp.json()
+            user_data = raw.get("user") or raw
+            # Minimal normalized subset
+            normalized = {
+                "id": str(user_data.get("id") or user_data.get("uid") or ""),
+                "name": user_data.get("name"),
+                "username": user_data.get("username"),
+                "email": user_data.get("email"),
+            }
+            _SESSION_CACHE[access_token] = (
+                now + _SESSION_CACHE_TTL_SECONDS,
+                normalized,
+            )
+            return normalized
+    except httpx.HTTPError:
+        return None
+
+
+def _read_bearer_token(auth_header: str | None) -> str | None:
+    if not auth_header:
+        return None
+    try:
+        scheme, token = auth_header.split(" ", 1)
+    except ValueError:
+        return None
+    if scheme.lower() != "bearer" or not token:
+        return None
+    return token.strip()
+
+
+async def get_vercel_user_from_request(request: Request) -> dict[str, Any] | None:
+    token = request.cookies.get("session_token") or _read_bearer_token(
+        request.headers.get("authorization") or request.headers.get("Authorization")
+    )
+    if not token:
+        return None
+    return await _fetch_vercel_user(token)
+
+
+async def require_vercel_user(request: Request) -> dict[str, Any]:
+    user = await get_vercel_user_from_request(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    return user
 
 
 @router.post("/login")
@@ -283,40 +347,31 @@ async def auth_callback_vercel(request: Request) -> Response:
 
 
 @router.get("/me")
-async def auth_me(request: Request) -> dict[str, Any]:
-    token = request.cookies.get("session_token")
-    if not token:
+async def auth_me(user: dict[str, Any] | None = Depends(get_vercel_user_from_request)) -> dict[str, Any]:
+    if not user:
         return {"authenticated": False}
-    async with httpx.AsyncClient(timeout=10.0) as client:
-        try:
-            user_resp = await client.get(
+    # Enrich with avatar/account type if available using a lightweight call; otherwise return minimal
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(
                 "https://api.vercel.com/v2/user",
-                headers={"Authorization": f"Bearer {token}"},
+                headers={"Authorization": f"Bearer {os.getenv('VERCEL_OIDC_TOKEN') or ''}"},
             )
-            user_resp.raise_for_status()
-            raw = user_resp.json()
-            user_data = raw.get("user") or raw
-
-            avatar_hash = user_data.get("avatar")
-            avatar_url = user_data.get("avatarUrl")
-            if not avatar_url and avatar_hash and isinstance(avatar_hash, str):
-                avatar_url = f"https://vercel.com/api/www/avatar/{avatar_hash}"
-
-            billing = user_data.get("billing") or {}
-            plan = billing.get("plan")
-            account_type = plan.capitalize() if isinstance(plan, str) and plan else None
-
-            normalized = {
-                "id": str(user_data.get("id") or user_data.get("uid") or ""),
-                "name": user_data.get("name"),
-                "username": user_data.get("username"),
-                "email": user_data.get("email"),
-                "avatar": avatar_url,
-                "accountType": account_type,
-            }
-            return {"authenticated": True, "user": normalized}
-        except httpx.HTTPError:
-            return {"authenticated": False}
+            # If token not available or fails, just return base user
+            if resp.status_code < 400:
+                raw = resp.json()
+                user_data = raw.get("user") or raw
+                avatar_hash = user_data.get("avatar")
+                avatar_url = user_data.get("avatarUrl")
+                if not avatar_url and avatar_hash and isinstance(avatar_hash, str):
+                    avatar_url = f"https://vercel.com/api/www/avatar/{avatar_hash}"
+                billing = user_data.get("billing") or {}
+                plan = billing.get("plan")
+                account_type = plan.capitalize() if isinstance(plan, str) and plan else None
+                user = {**user, "avatar": avatar_url, "accountType": account_type}
+    except Exception:
+        pass
+    return {"authenticated": True, "user": user}
 
 
 @router.post("/logout")

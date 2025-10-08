@@ -61,6 +61,7 @@ export function usePlay() {
     const res = await fetch(`${API_BASE}/play`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
       body: JSON.stringify({
         user_id: args.userId,
         project: args.project,
