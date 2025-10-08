@@ -8,6 +8,7 @@ https://python-vibe-coding-ide-blush.labs.vercel.dev/
 ### Frontend:
 ```
 cd frontend
+pnpm install
 pnpm run dev
 ```
 
