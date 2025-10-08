@@ -5,7 +5,6 @@ from typing import Any
 from src.auth import make_stream_token
 
 
-# Reusable SSE headers
 SSE_HEADERS: dict[str, str] = {
     "Content-Type": "text/event-stream",
     "Cache-Control": "no-cache",
@@ -51,7 +50,10 @@ def tool_started_sse(task_id: str, ev: dict[str, Any]) -> str:
 
 
 def tool_completed_sse(
-    task_id: str, ev: dict[str, Any], base_payload: dict[str, Any], project: dict[str, str]
+    task_id: str,
+    ev: dict[str, Any],
+    base_payload: dict[str, Any],
+    project: dict[str, str],
 ) -> str:
     output_data: Any = ev.get("output_data")
     if ev.get("name") == "request_code_execution" and isinstance(output_data, dict):
@@ -61,7 +63,11 @@ def tool_completed_sse(
             "query": base_payload["query"],
             "project": project,
             # Preserve model selection for resume flows if present
-            **({"model": base_payload.get("model")} if base_payload.get("model") else {}),
+            **(
+                {"model": base_payload.get("model")}
+                if base_payload.get("model")
+                else {}
+            ),
         }
         output_data = {**output_data, "resume_token": make_stream_token(token_payload)}
 

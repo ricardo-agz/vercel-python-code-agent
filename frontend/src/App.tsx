@@ -13,6 +13,12 @@ import ThreePane from './components/ThreePane';
 import { FileTree } from './components/FileTree';
 import { TerminalPane } from './components/TerminalPane';
 import { usePlay } from './hooks/usePlay';
+import { AuthModal } from './components/AuthModal';
+import { useAuth } from './context/AuthContext';
+import StatusBar from './components/StatusBar';
+import AccountMenu from './components/AccountMenu';
+import { CodeFixModal } from './components/CodeFixModal';
+import { API_BASE } from './constants';
 
 type ResizableCenterProps = {
   code: string;
@@ -27,12 +33,14 @@ type ResizableCenterProps = {
   onOpenPreview?: () => void;
   terminalLogs: string;
   onClearLogs: () => void;
+  onRequestCodeFix?: (args: { fileName: string; startLine: number; endLine: number; selectedCode: string }) => void;
 };
 
-const ResizableCenter: React.FC<ResizableCenterProps> = ({ code, setCode, proposals, clearProposal, activeFile, onRun, running, onStop, previewUrl, onOpenPreview, terminalLogs, onClearLogs }) => {
+const ResizableCenter: React.FC<ResizableCenterProps> = ({ code, setCode, proposals, clearProposal, activeFile, onRun, running, onStop, previewUrl, onOpenPreview, terminalLogs, onClearLogs, onRequestCodeFix }) => {
   const containerRef = React.useRef<HTMLDivElement>(null);
   const [terminalHeight, setTerminalHeight] = React.useState<number>(200);
   const [resizing, setResizing] = React.useState<boolean>(false);
+  const [status, setStatus] = React.useState<{ line: number; column: number; language: string }>({ line: 1, column: 1, language: 'plaintext' });
 
   const minTerminalHeight = 120;
   const minEditorHeight = 120;
@@ -89,14 +97,21 @@ const ResizableCenter: React.FC<ResizableCenterProps> = ({ code, setCode, propos
           running={running}
           previewUrl={previewUrl}
           onOpenPreview={onOpenPreview}
+          onStatusChange={setStatus}
+          onRequestCodeFix={onRequestCodeFix}
         />
       </div>
-      <div
-        onMouseDown={onMouseDown}
-        className={`h-1 cursor-row-resize transition-colors`}
-        style={{ backgroundColor: resizing ? 'var(--vscode-accent)' : 'var(--vscode-panel-border)', position: 'relative', zIndex: 99999 }}
-      />
-      <TerminalPane height={terminalHeight} logs={terminalLogs} onClear={onClearLogs} />
+      {terminalLogs && terminalLogs.length > 0 ? (
+        <>
+          <div
+            onMouseDown={onMouseDown}
+            className={`h-1 cursor-row-resize transition-colors`}
+            style={{ backgroundColor: resizing ? 'var(--vscode-accent)' : 'var(--vscode-panel-border)', position: 'relative', zIndex: 99999 }}
+          />
+          <TerminalPane height={terminalHeight} logs={terminalLogs} onClear={onClearLogs} />
+        </>
+      ) : null}
+      <StatusBar line={status.line} column={status.column} language={status.language} />
       {resizing && (
         <div
           className="fixed inset-0"
@@ -221,6 +236,7 @@ const USER_ID = `user_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
 function App() {
   // Sandbox play hook for remote execution
   const play = usePlay();
+  const { isAuthenticated, user, openModal } = useAuth();
 
   // Project: mapping of file path -> content
   const [project, setProject] = useState<Record<string, string>>(STARTER_PROJECT);
@@ -245,12 +261,13 @@ function App() {
   const [loading, setLoading] = useState(false);
   const [currentTaskId, setCurrentTaskId] = useState<string | null>(null);
   const [cancelling, setCancelling] = useState(false);
-  const [model, setModel] = useState<string>('anthropic/claude-3.5-haiku');
+  const [model, setModel] = useState<string>('anthropic/claude-sonnet-4.5');
   // Sidebar resizing
   // Track if we're currently processing a code-execution decision
   const [executingCode, setExecutingCode] = useState(false);
   // Track which execution action is currently being processed so we can show a loader
   const [executionAction, setExecutionAction] = useState<'accept' | 'reject' | null>(null);
+  const [inlineFixLoading, setInlineFixLoading] = useState<boolean>(false);
 
   // Track a pending exec approval that should resume the agent after sandbox completes
   const [pendingExecResume, setPendingExecResume] = useState<{
@@ -263,6 +280,31 @@ function App() {
 
   // Runs context
   const { runs, runOrder, updateAction } = useRuns();
+  // Code-fix modal state
+  const [codeFix, setCodeFix] = useState<{
+    fileName: string;
+    startLine: number;
+    endLine: number;
+    selectedCode: string;
+  } | null>(null);
+
+  const openCodeFix = React.useCallback((args: { fileName: string; startLine: number; endLine: number; selectedCode: string }) => {
+    setCodeFix(args);
+  }, []);
+
+  const closeCodeFix = React.useCallback(() => setCodeFix(null), []);
+
+  // Close inline edit modal on file switch
+  React.useEffect(() => {
+    setCodeFix(null);
+    setInlineFixLoading(false);
+  }, [activeFile]);
+
+  // Declare placeholder for send function; assign later after hook is initialized
+  const submitCodeFixRef = React.useRef<null | ((instruction: string) => Promise<void>)>(null);
+  const submitCodeFix = React.useCallback(async (instruction: string) => {
+    if (submitCodeFixRef.current) await submitCodeFixRef.current(instruction);
+  }, []);
 
   const timelineActions = React.useMemo(() => {
     return runOrder.flatMap(id => runs[id]?.actions || []);
@@ -398,6 +440,43 @@ function App() {
     stream,
     model,
   });
+
+  // Initialize the submitCodeFix callback to hit inline-fix API and propose changes
+  React.useEffect(() => {
+    submitCodeFixRef.current = async (instruction: string) => {
+      const args = codeFix; // capture current
+      if (!args) return;
+      try {
+        setInlineFixLoading(true);
+        const res = await fetch(`${API_BASE}/inline-fix`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify({
+            user_id: USER_ID,
+            project,
+            file_path: args.fileName,
+            start_line: args.startLine,
+            end_line: args.endLine,
+            instruction,
+            selected_code: args.selectedCode,
+            model,
+          }),
+        });
+        const data = await res.json();
+        if (res.ok && data.ok && data.file_path && typeof data.new_file_content === 'string') {
+          upsertProposal(data.file_path as string, data.new_file_content as string);
+        } else {
+          console.error('inline-fix failed', data?.error || res.statusText);
+        }
+      } catch (e) {
+        console.error('inline-fix error', e);
+      } finally {
+        setCodeFix(null);
+        setInlineFixLoading(false);
+      }
+    };
+  }, [codeFix, project, model, upsertProposal]);
   const handleRun = React.useCallback(() => {
     const merged: Record<string, string> = { ...project };
     // If a proposal exists for active file and is visible, prefer current editor content via code state
@@ -413,6 +492,7 @@ function App() {
 
   const handleSendMessage = async () => {
     if (!input.trim() || loading) return;
+    if (!isAuthenticated) { openModal(); return; }
     await sendPrompt();
   };
 
@@ -520,6 +600,7 @@ function App() {
   };
 
   return (
+    <>
     <ThreePane
       left={(
         <FileTree
@@ -714,6 +795,8 @@ function App() {
           onOpenPreview={play.openPreview}
           terminalLogs={play.logs}
           onClearLogs={play.clear}
+        // When editor requests a code fix open modal
+        onRequestCodeFix={openCodeFix}
         />
       )}
       right={(
@@ -741,10 +824,47 @@ function App() {
             showCancel={!!currentTaskId}
             onCancel={handleCancelTask}
             cancelling={cancelling}
+            suggestions={
+              timelineActions.length === 0
+                ? [
+                    'Add a FastAPI /todos API with in-memory CRUD (GET, POST, DELETE) and run',
+                    'Implement /math/fibonacci?n=20 that returns the sequence as JSON and run',
+                    'Add request logging middleware plus /health and /time endpoints and run',
+                    'Create a /text/wordcount endpoint that accepts text in JSON and returns counts and run',
+                  ]
+                : undefined
+            }
           />
+          <div className="px-4 py-2 text-xs text-gray-500">
+            {isAuthenticated ? (
+              <span>Signed in{user?.username ? ` as @${user.username}` : ''}</span>
+            ) : null}
+          </div>
         </>
       )}
     />
+    <AuthModal />
+    <AccountMenu />
+    <CodeFixModal
+      visible={!!codeFix}
+      fileName={codeFix?.fileName || ''}
+      startLine={codeFix?.startLine || 0}
+      endLine={codeFix?.endLine || 0}
+      selectedCode={codeFix?.selectedCode || ''}
+      onClose={closeCodeFix}
+      onSubmit={async (instruction, modelOverride) => {
+        // temporarily override model for this request only
+        const previous = model;
+        if (modelOverride) setModel(modelOverride);
+        setLoading(true);
+        await submitCodeFix(instruction);
+        setLoading(false);
+        if (modelOverride) setModel(previous);
+      }}
+      currentModel={model}
+      loading={inlineFixLoading}
+    />
+    </>
   );
 }
 
