@@ -175,12 +175,10 @@ export function usePlay() {
   }, [apiOrigin, playId, streamToken, sandboxId]);
 
   const openPreview = useCallback(() => {
-    if (previewUrl) {
-      try { window.open(previewUrl, '_blank', 'noopener,noreferrer'); } catch { /* noop */ }
-    }
-  }, [previewUrl]);
+    // No-op: preview will be embedded in the center pane
+  }, []);
 
-  return { status, logs, start, stop, clear, previewUrl, openPreview, playId, sandboxId } as const;
+  return { status, logs, start, stop, clear, previewUrl, openPreview, playId, sandboxId, setPreviewUrl } as const;
 }
 
 

@@ -22,12 +22,14 @@ export interface ToolStartedAction extends BaseAction {
   kind: 'tool_started';
   toolName: string;
   arguments: unknown;
+  logs?: string;
 }
 
 export interface ToolCompletedAction extends BaseAction {
   kind: 'tool_completed';
   toolName: string;
   result: unknown;
+  logs?: string;
 }
 
 export interface ToolFailedAction extends BaseAction {

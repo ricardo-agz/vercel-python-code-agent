@@ -7,6 +7,7 @@ interface RunContextValue {
   createRun: (runId: string, userPrompt: string) => void;
   addAction: (runId: string, action: Action) => void;
   updateAction: (runId: string, actionId: string, updater: (prev: Action | undefined) => Action) => void;
+  appendActionLog: (runId: string, actionId: string, line: string) => void;
 }
 
 const RunContext = React.createContext<RunContextValue | undefined>(undefined);
@@ -63,6 +64,19 @@ function runReducer(state: RunState, action: { type: string; payload: unknown })
         order: state.order,
       };
     }
+    case 'appendActionLog': {
+      const { runId, actionId, line } = action.payload as { runId: string; actionId: string; line: string };
+      const existingRun = state.runs[runId];
+      if (!existingRun) return state;
+      const idx = existingRun.actions.findIndex(a => a.id === actionId);
+      if (idx === -1) return state;
+      const prev = existingRun.actions[idx] as any;
+      const nextLogs: string = (prev.logs as string | undefined) ? `${prev.logs}${line}` : `${line}`;
+      const updated = { ...(prev as object), logs: nextLogs } as Action;
+      const updatedActions = [...existingRun.actions];
+      updatedActions[idx] = updated;
+      return { runs: { ...state.runs, [runId]: { ...existingRun, actions: updatedActions } }, order: state.order };
+    }
     default:
       return state;
   }
@@ -90,7 +104,11 @@ export const RunProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     [],
   );
 
-  const value = React.useMemo<RunContextValue>(() => ({ runs: state.runs, runOrder: state.order, createRun, addAction, updateAction }), [state, createRun, addAction, updateAction]);
+  const appendActionLog = React.useCallback((runId: string, actionId: string, line: string) => {
+    dispatch({ type: 'appendActionLog', payload: { runId, actionId, line } });
+  }, []);
+
+  const value = React.useMemo<RunContextValue>(() => ({ runs: state.runs, runOrder: state.order, createRun, addAction, updateAction, appendActionLog }), [state, createRun, addAction, updateAction, appendActionLog]);
 
   return <RunContext.Provider value={value}>{children}</RunContext.Provider>;
 };

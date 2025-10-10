@@ -9,6 +9,7 @@ from fastapi.responses import StreamingResponse
 from vercel.sandbox import Sandbox
 
 from src.auth import make_stream_token, read_stream_token
+from src.agent.utils import make_ignore_predicate
 from src.sse import (
     SSE_HEADERS,
     sse_format,
@@ -55,13 +56,20 @@ def _detect_runtime_and_command(
         return "node22", f"(node {entry_path})"
     if entry.endswith(".ts") or entry.endswith(".tsx"):
         return "node22", f"(npx -y tsx {entry_path} || npx -y ts-node {entry_path})"
+    if entry.endswith(".rb"):
+        return "ruby3.2", f"(ruby {entry_path})"
     return None, None
 
 
 async def run_play_flow(
     payload: dict[str, Any], task_id: str
 ) -> AsyncGenerator[str, None]:
+    # Filter project before syncing to sandbox
     project: dict[str, str] = payload.get("project", {})
+    is_ignored = make_ignore_predicate(project)
+    filtered_project: dict[str, str] = {
+        p: c for p, c in project.items() if (not is_ignored(p)) or (p in {".gitignore", ".agentignore"})
+    }
     entry_path: str = payload.get("entry_path", "")
     runtime_override: str | None = payload.get("runtime")
     env: dict[str, str] = payload.get("env", {}) or {}
@@ -76,13 +84,15 @@ async def run_play_flow(
         return
 
 
-    content = project.get(entry_path, "") or ""
+    # Ensure entry file content available even if ignored
+    content = (filtered_project.get(entry_path) or project.get(entry_path) or "")
     is_fastapi = entry_path.lower().endswith(".py") and (
         "FastAPI(" in content
         or "from fastapi" in content
         or "import fastapi" in content
     )
-    port = int(os.getenv("SANDBOX_APP_PORT", "8000")) if is_fastapi else None
+    is_ruby = entry_path.lower().endswith(".rb")
+    port = int(os.getenv("SANDBOX_APP_PORT", "8000")) if is_fastapi else (4567 if is_ruby else None)
 
     yield sse_format(
         emit_event(
@@ -140,7 +150,7 @@ async def run_play_flow(
             pass
 
         files_payload = []
-        for path, content in project.items():
+        for path, content in filtered_project.items():
             try:
                 files_payload.append({"path": path, "content": content.encode("utf-8")})
             except Exception:
@@ -171,7 +181,7 @@ async def run_play_flow(
         try:
             if entry_path.lower().endswith(".py"):
                 req_path = _find_closest_file(
-                    project, entry_path, ["requirements.txt"]
+                    filtered_project, entry_path, ["requirements.txt"]
                 )  # basic support
                 if req_path:
                     yield sse_format(
@@ -244,9 +254,48 @@ async def run_play_flow(
                             )
                         )
                         return
+            elif entry_path.lower().endswith(".rb"):
+                gemfile_path = _find_closest_file(filtered_project, entry_path, ["Gemfile"])
+                if gemfile_path:
+                    try:
+                        yield sse_format(
+                            emit_event(
+                                task_id,
+                                "play_log",
+                                data=f"Installing Ruby dependencies from {gemfile_path} via Bundler...\n",
+                            )
+                        )
+                    except Exception:
+                        pass
+                    bundler_install_cmd = (
+                        "if ! command -v bundle >/dev/null 2>&1; then "
+                        "gem list -i bundler >/dev/null 2>&1 || gem install --no-document bundler; "
+                        "fi; "
+                        "bundle --version || true; "
+                        "mkdir -p vendor/bundle; "
+                        "bundle config set --local path vendor/bundle; "
+                        "bundle config set --local without 'development:test'; "
+                        "bundle install"
+                    )
+                    install_cmd = await sandbox.run_command_detached(
+                        "bash",
+                        ["-lc", f"cd {sandbox.sandbox.cwd} && {bundler_install_cmd}"],
+                    )
+                    async for line in install_cmd.logs():
+                        yield sse_format(emit_event(task_id, "play_log", data=line.data))
+                    install_done = await install_cmd.wait()
+                    if install_done.exit_code != 0:
+                        yield sse_format(
+                            emit_event(
+                                task_id,
+                                "play_failed",
+                                error=f"Dependency install failed (exit {install_done.exit_code})",
+                            )
+                        )
+                        return
             elif entry_path.lower().endswith((".js", ".mjs", ".cjs", ".ts", ".tsx")):
                 pkg_json = _find_closest_file(
-                    project, entry_path, ["package.json"]
+                    filtered_project, entry_path, ["package.json"]
                 )  # npm project
                 if pkg_json:
                     pkg_dir = os.path.dirname(pkg_json)
@@ -258,7 +307,7 @@ async def run_play_flow(
                     )
                     npm_install = (
                         "npm ci --loglevel info"
-                        if lock_path in project
+                        if lock_path in filtered_project
                         else "npm install --loglevel info"
                     ) + " || npm install --loglevel info"
                     yield sse_format(
@@ -328,11 +377,14 @@ async def run_play_flow(
                 env=env_to_use,
             )
         else:
+            command_to_run = command
+            if is_ruby:
+                command_to_run = f"( [ -f Gemfile ] && bundle exec {command} || {command} )"
             cmd = await sandbox.run_command_detached(
                 "bash",
                 [
                     "-lc",
-                    f"cd {sandbox.sandbox.cwd} && {command}",
+                    f"cd {sandbox.sandbox.cwd} && {command_to_run}",
                 ],
                 env=env,
             )
@@ -345,6 +397,28 @@ async def run_play_flow(
                 and (
                     ("Application startup complete" in line.data)
                     or ("Uvicorn running on" in line.data)
+                )
+            ):
+                try:
+                    url = sandbox.domain(port) if port else None
+                except Exception:
+                    url = None
+                if url:
+                    yield sse_format(
+                        emit_event(
+                            task_id,
+                            "play_preview",
+                            data={"url": url, "port": port},
+                        )
+                    )
+                    preview_sent = True
+            if (
+                is_ruby
+                and not preview_sent
+                and (
+                    ("Listening on" in line.data)
+                    or ("tcp://0.0.0.0:" in line.data)
+                    or ("Sinatra has taken the stage" in line.data)
                 )
             ):
                 try:

@@ -1,5 +1,5 @@
 import React from 'react';
-import { MessageSquare, Loader } from 'lucide-react';
+import { MessageSquare, Loader, Box, Code2, Cpu, Gem } from 'lucide-react';
 import type { Action, ExecResultAction } from '../types/run';
 
 interface TimelineProps {
@@ -86,6 +86,8 @@ export const Timeline: React.FC<TimelineProps> = ({ actions, isEmpty, loading })
               }
               case 'tool_completed': {
                 const res = action.result as {
+                  url?: string;
+                  exit_code?: number;
                   file_path?: string;
                   find_start_line?: number;
                   find_end_line?: number;
@@ -99,6 +101,32 @@ export const Timeline: React.FC<TimelineProps> = ({ actions, isEmpty, loading })
                   removed_files?: number;
                   moved_files?: number;
                 } | undefined;
+                if (action.toolName === 'sandbox_create') {
+                  const info = (res as unknown as { runtime?: string; sandbox_id?: string; synthetic_runtime?: boolean; effective_runtime?: string }) || {};
+                  const runtime = info?.runtime || (action as unknown as { arguments?: { runtime?: string } }).arguments?.runtime || 'auto';
+                  return (
+                    <div key={key} className="flex items-center gap-2 text-xs ml-4" style={{ color: 'var(--vscode-subtle)' }}>
+                      <Box className="w-3 h-3" />
+                      <span>Acquired sandbox</span>
+                      <RuntimePill runtime={runtime} />
+                    </div>
+                  );
+                }
+                if (action.toolName === 'sandbox_show_preview' && res?.url) {
+                  const origin = (() => { try { return new URL(res.url).host; } catch { return res.url; } })();
+                  return (
+                    <PreviewCard key={key} url={res.url} origin={origin} />
+                  );
+                }
+                if (action.toolName === 'sandbox_run') {
+                  const args = (action as unknown as { arguments?: { command?: string; cwd?: string } }).arguments;
+                  const status: 'running' | 'done' | 'failed' = typeof res?.exit_code === 'number' ? (res.exit_code === 0 ? 'done' : 'failed') : 'done';
+                  return (
+                    <div key={key} className="mr-4">
+                      <MiniTerminal command={args?.command || ''} cwd={args?.cwd} status={status} output={((action as unknown as { logs?: string }).logs || '')} />
+                    </div>
+                  );
+                }
                 if (action.toolName === 'edit_code' && res?.file_path && res.find_start_line && res.find_end_line) {
                   return (
                     <div key={key} className="text-xs text-purple-400">
@@ -157,9 +185,27 @@ export const Timeline: React.FC<TimelineProps> = ({ actions, isEmpty, loading })
                 );
               }
               case 'tool_started':
-                return (
-                <div key={key} className="text-xs" style={{ color: 'var(--vscode-subtle)' }}>Running {action.toolName}...</div>
-                );
+                if ((action as unknown as { toolName?: string }).toolName === 'sandbox_run') {
+                  const args = (action as unknown as { arguments?: { command?: string; cwd?: string } }).arguments;
+                  return (
+                    <div key={key} className="mr-4">
+                      <MiniTerminal command={args?.command || ''} cwd={args?.cwd} status="running" output={((action as unknown as { logs?: string }).logs || '')} />
+                    </div>
+                  );
+                }
+                if ((action as unknown as { toolName?: string }).toolName === 'sandbox_create') {
+                  const args = (action as unknown as { arguments?: { runtime?: string } }).arguments;
+                  const runtime = args?.runtime || 'auto';
+                  return (
+                    <div key={key} className="flex items-center gap-2 text-xs ml-4" style={{ color: 'var(--vscode-subtle)' }}>
+                      <Loader className="w-3 h-3 animate-spin" />
+                      <span>Creating</span>
+                      <RuntimePill runtime={runtime} />
+                      <span>sandbox</span>
+                    </div>
+                  );
+                }
+                return (<div key={key} className="text-xs" style={{ color: 'var(--vscode-subtle)' }}>Running {action.toolName}...</div>);
               case 'assistant_thought':
                 return (
                 <div key={key} className="mr-4 px-2 text-xs" style={{ color: 'var(--vscode-muted)', fontStyle: 'italic' }}>
@@ -191,3 +237,72 @@ export const Timeline: React.FC<TimelineProps> = ({ actions, isEmpty, loading })
 };
 
 
+const RuntimePill: React.FC<{ runtime: string }> = ({ runtime }) => {
+  const lower = (runtime || '').toLowerCase();
+  const Icon = lower.startsWith('node') ? Code2 : lower.startsWith('python') ? Cpu : lower.startsWith('ruby') ? Gem : Box;
+  const label = lower || 'auto';
+  return (
+    <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-sm" style={{ background: 'var(--vscode-surface)', color: 'var(--vscode-text)', border: '1px solid var(--vscode-panel-border)' }}>
+      <Icon className="w-3 h-3" />
+      <span>{label}</span>
+    </span>
+  );
+};
+
+const PreviewCard: React.FC<{ url: string; origin: string }> = ({ url, origin }) => {
+  const [collapsed, setCollapsed] = React.useState(false);
+  return (
+    <div className="text-xs">
+      <div className="mb-1" style={{ color: 'var(--vscode-subtle)' }}>Preview</div>
+      <div style={{ border: '1px solid var(--vscode-panel-border)', borderRadius: 6, overflow: 'hidden', backgroundColor: 'var(--vscode-panel)' }}>
+        <div className="flex items-center justify-between px-2 py-1" style={{ background: 'var(--vscode-surface)', borderBottom: '1px solid var(--vscode-panel-border)' }}>
+          <div className="flex items-center gap-2">
+            <span style={{ display: 'inline-block', width: 10, height: 10, borderRadius: 9999, background: '#ff5f57' }} />
+            <button onClick={() => setCollapsed(v => !v)} title="Minimize" style={{ width: 10, height: 10, borderRadius: 9999, background: '#ffbd2e', border: 0, padding: 0 }} />
+            <a href={url} title="Open in new tab" target="_blank" rel="noreferrer" style={{ width: 10, height: 10, borderRadius: 9999, background: '#28c840', display: 'inline-block' }} />
+            <div className="ml-2 text-ellipsis overflow-hidden whitespace-nowrap" style={{ color: 'var(--vscode-text)', maxWidth: 200 }}>
+              {origin}
+            </div>
+          </div>
+          <a href={url} target="_blank" rel="noreferrer" className="underline" style={{ color: 'var(--vscode-accent)' }}>open</a>
+        </div>
+        {!collapsed && (
+          <iframe src={url} title="Preview" style={{ width: '100%', height: 220, border: 'none', background: '#ffffff', colorScheme: 'light' }} />
+        )}
+      </div>
+    </div>
+  );
+};
+
+
+const MiniTerminal: React.FC<{
+  command: string;
+  cwd?: string;
+  status: 'running' | 'done' | 'failed';
+  output?: string;
+}> = ({ command, cwd, status, output }) => {
+  const [open, setOpen] = React.useState(false);
+  return (
+    <div className="text-xs" style={{ border: '1px solid var(--vscode-panel-border)', borderRadius: 6, overflow: 'hidden', background: 'var(--vscode-panel)' }}>
+      <div className="flex items-center justify-between px-2 py-1" style={{ background: 'var(--vscode-surface)', borderBottom: '1px solid var(--vscode-panel-border)' }}>
+        <div className="flex items-center gap-2">
+          <span style={{ display: 'inline-block', width: 10, height: 10, borderRadius: 9999, background: status === 'failed' ? '#ff5f57' : status === 'done' ? '#28c840' : '#ffbd2e' }} />
+          <span style={{ color: 'var(--vscode-subtle)' }}>{cwd ? `${cwd} $` : '$'}</span>
+        </div>
+        <button onClick={() => setOpen(v => !v)} className="px-2 py-0.5 rounded-sm" style={{ background: 'var(--vscode-surface)', color: 'var(--vscode-text)', border: '1px solid var(--vscode-panel-border)' }}>
+          {open ? 'Hide output' : 'Show output'}
+        </button>
+      </div>
+      <pre className="m-0 p-2 font-mono whitespace-pre-wrap" style={{ color: 'var(--vscode-text)' }}>
+        <code>{command}</code>
+      </pre>
+      {open && (
+        <div style={{ borderTop: '1px dashed var(--vscode-panel-border)' }}>
+          <pre className="m-0 p-2 font-mono text-xs whitespace-pre-wrap" style={{ color: 'var(--vscode-subtle)', maxHeight: 240, overflow: 'auto' }}>
+            <code>{output || ''}</code>
+          </pre>
+        </div>
+      )}
+    </div>
+  );
+};

@@ -13,6 +13,8 @@ interface UseAgentEventsProps {
   onRenameFolder?: (oldPath: string, newPath: string) => void;
   onRenameFile?: (oldPath: string, newPath: string) => void;
   onDeleteFile?: (filePath: string) => void;
+  onUpsertFile?: (filePath: string, content: string) => void;
+  onSetPreviewUrl?: (url: string | null) => void;
 }
 
 export const useAgentEvents = ({
@@ -25,11 +27,20 @@ export const useAgentEvents = ({
   onRenameFolder,
   onRenameFile,
   onDeleteFile,
+  onUpsertFile,
+  onSetPreviewUrl,
 }: UseAgentEventsProps) => {
-  const { runs, addAction, updateAction } = useRuns();
+  const { runs, addAction, updateAction, appendActionLog } = useRuns();
 
   const handleEvent = useCallback((event: AgentEvent) => {
     switch (event.event_type) {
+      case 'progress_update_tool_action_log': {
+        const data = event.data as { id?: string; data?: string } | undefined;
+        if (data?.id && typeof data.data === 'string') {
+          appendActionLog(event.task_id, data.id, data.data);
+        }
+        break;
+      }
       case 'run_log': {
         const logMsg = typeof event.data === 'string' ? event.data : JSON.stringify(event.data);
         console.log('run_log', logMsg);
@@ -139,7 +150,7 @@ export const useAgentEvents = ({
             });
           }
         } else {
-          updateAction(event.task_id, toolCall.id, (prev) => ({
+          updateAction(event.task_id, toolCall.id, (prev: Action | undefined) => ({
             ...(prev ?? {
               id: toolCall.id,
               kind: 'tool_completed',
@@ -152,6 +163,8 @@ export const useAgentEvents = ({
             toolName: toolCall.function.name,
             result: resp.output_data,
             timestamp: event.timestamp,
+            // preserve any streamed logs accumulated during the run
+            ...(prev && (prev as unknown as { logs?: string }).logs ? { logs: (prev as unknown as { logs?: string }).logs } : {}),
           }) as Action);
 
           if (toolCall.function.name === 'think' && typeof resp.output_data === 'string') {
@@ -163,6 +176,69 @@ export const useAgentEvents = ({
               timestamp: event.timestamp,
             } as Action;
             addAction(event.task_id, thoughtAction);
+          }
+
+          // Auto-resync project from sandbox_run file snapshot
+          if (toolCall.function.name === 'sandbox_run') {
+            // Surface preview URLs if included in output
+            const prevUrl = resp.output_data?.preview_url as string | undefined;
+            if (prevUrl) onSetPreviewUrl?.(prevUrl);
+
+            if (!resp.output_data?.fs) break;
+            try {
+              const fs = resp.output_data.fs as {
+                created?: string[];
+                updated?: string[];
+                deleted?: string[];
+                data?: Array<{ path: string; encoding?: string; content?: string }>;
+              };
+
+              const created = new Set((fs.created || []).map(p => (p || '').replace(/^\.\//, '')));
+
+              // Ensure all created files are present in the project tree immediately
+              created.forEach((p) => {
+                if (!p) return;
+                onUpsertFile?.(p, '');
+              });
+
+              // Decode provided file contents and surface as proposals
+              const dec = new TextDecoder('utf-8');
+              (fs.data || []).forEach((entry) => {
+                const p = (entry.path || '').replace(/^\.\//, '');
+                if (!p) return;
+                if (entry.encoding === 'base64' && typeof entry.content === 'string') {
+                  try {
+                    const bin = Uint8Array.from(atob(entry.content), c => c.charCodeAt(0));
+                    const text = dec.decode(bin);
+                    // Keep content as proposal; the actual project content is empty until user accepts
+                    upsertProposal(p, text);
+                  } catch {
+                    // ignore decode errors
+                  }
+                }
+              });
+
+              // For deleted files, we do not remove immediately; this can be shown as a timeline entry
+              if ((fs.deleted || []).length > 0) {
+                const deletionNotice: Action = {
+                  id: `deleted_${Date.now()}`,
+                  kind: 'tool_completed',
+                  status: 'done',
+                  toolName: 'sandbox_run_fs_deleted',
+                  result: { deleted: fs.deleted },
+                  timestamp: event.timestamp,
+                } as Action;
+                addAction(event.task_id, deletionNotice);
+              }
+            } catch {
+              // ignore snapshot parse errors
+            }
+          }
+
+          // Preview URL via sandbox_show_preview
+          if (toolCall.function.name === 'sandbox_show_preview') {
+            const info = resp.output_data as { url?: string } | undefined;
+            if (info?.url) onSetPreviewUrl?.(info.url);
           }
         }
         break;
@@ -255,6 +331,9 @@ export const useAgentEvents = ({
     onRenameFolder,
     onRenameFile,
     onDeleteFile,
+    onUpsertFile,
+    onSetPreviewUrl,
+    appendActionLog,
     addAction,
     updateAction,
     runs,
