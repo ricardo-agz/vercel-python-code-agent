@@ -441,6 +441,106 @@ async def delete_folder(ctx: RunContextWrapper[IDEContext], folder_path: str) ->
 _SANDBOX_CACHE: Dict[str, Sandbox] = {}
 
 
+def _normalize_sandbox_name(ctx: RunContextWrapper[IDEContext], name: Optional[str]) -> str:
+    """Resolve the effective sandbox name.
+
+    Prefers the provided name; otherwise uses the active name if set; otherwise "default".
+    Also sets the active name if not set previously.
+    """
+    n = (name or ctx.context.active_sandbox or "default").strip() or "default"
+    if not ctx.context.active_sandbox:
+        ctx.context.active_sandbox = n
+    return n
+
+
+async def _snapshot_files_into_context_named(
+    ctx: RunContextWrapper[IDEContext], sandbox: Sandbox, name: str
+) -> None:
+    """Snapshot filesystem and record both global (back-compat) and per-sandbox state."""
+    try:
+        cmd_ls = await sandbox.run_command(
+            "bash",
+            [
+                "-lc",
+                (
+                    f"cd {sandbox.sandbox.cwd} && "
+                    "find . \\( -path './.git/*' -o -path './node_modules/*' -o -path './vendor/*' -o -path './.bundle/*' -o -path './.cache/*' -o -path './tmp/*' -o -path './log/*' -o -path './logs/*' \\) -prune -o -type f -printf '%P\t%T@\t%s\n' 2>/dev/null | sort"
+                ),
+            ],
+        )
+        out = await cmd_ls.stdout()
+        current: dict[str, str] = {}
+        files: list[str] = []
+        for line in (out or "").splitlines():
+            try:
+                rel, mtime, size = line.split("\t", 2)
+            except ValueError:
+                continue
+            files.append(rel)
+            current[rel] = f"{mtime} {size}"
+        # Filter out ignored paths
+        try:
+            is_ignored = make_ignore_predicate(ctx.context.project or {})
+            filtered_files = [p for p in files if not is_ignored(p)]
+            filtered_current: dict[str, str] = {p: meta for p, meta in current.items() if not is_ignored(p)}
+        except Exception:
+            filtered_files = files
+            filtered_current = current
+        # Back-compat single-sandbox fields
+        ctx.context.sandbox_files = filtered_files
+        ctx.context.sandbox_file_meta = filtered_current
+        # Per-sandbox maps
+        ctx.context.sandbox_files_map[name] = filtered_files
+        ctx.context.sandbox_file_meta_map[name] = filtered_current
+    except Exception:
+        # Non-fatal
+        pass
+
+
+async def _get_sandbox_by_name(
+    ctx: RunContextWrapper[IDEContext], name: str
+) -> Sandbox:
+    """Get or create a sandbox by name; maintains back-compat fields as well."""
+    # If we have a mapping, fetch from cache or remote
+    sid = (ctx.context.sandbox_name_to_id or {}).get(name)
+    if sid and sid in _SANDBOX_CACHE:
+        return _SANDBOX_CACHE[sid]
+    if sid:
+        fetched = await Sandbox.get(sandbox_id=sid)
+        _SANDBOX_CACHE[sid] = fetched
+        return fetched
+    # If no mapping but legacy single-sandbox exists and name is default, adopt it
+    if (not sid) and (name == "default") and ctx.context.sandbox_id:
+        sid = ctx.context.sandbox_id
+        if sid in _SANDBOX_CACHE:
+            ctx.context.sandbox_name_to_id[name] = sid
+            return _SANDBOX_CACHE[sid]
+        fetched = await Sandbox.get(sandbox_id=sid)
+        _SANDBOX_CACHE[sid] = fetched
+        ctx.context.sandbox_name_to_id[name] = sid
+        return fetched
+    # Create a new sandbox with stored preferences or legacy defaults
+    runtime = (ctx.context.sandbox_runtime_map or {}).get(name) or ctx.context.sandbox_runtime
+    ports = (ctx.context.sandbox_ports_map or {}).get(name) or ctx.context.sandbox_ports
+    sandbox = await Sandbox.create(
+        timeout=600_000,
+        runtime=runtime,
+        ports=ports,
+    )
+    ctx.context.sandbox_name_to_id[name] = sandbox.sandbox_id
+    ctx.context.active_sandbox = name
+    # Update legacy single-sandbox fields for back-compat
+    ctx.context.sandbox_id = sandbox.sandbox_id
+    ctx.context.sandbox_runtime = runtime
+    ctx.context.sandbox_ports = ports
+    _SANDBOX_CACHE[sandbox.sandbox_id] = sandbox
+    try:
+        await _sync_project_files(ctx, sandbox)
+        await _snapshot_files_into_context_named(ctx, sandbox, name)
+    except Exception:
+        pass
+    return sandbox
+
 async def _sync_project_files(ctx: RunContextWrapper[IDEContext], sandbox: Sandbox) -> int:
     to_write: list[dict[str, Any]] = []
     written = 0
@@ -552,6 +652,7 @@ async def sandbox_create(
     runtime: Optional[str] = None,
     ports: Optional[List[int]] = None,
     timeout_ms: Optional[int] = 600_000,
+    name: Optional[str] = None,
 ) -> str:
     """Create a persistent sandbox and remember it for this run.
 
@@ -563,7 +664,7 @@ async def sandbox_create(
         JSON with sandbox details.
     """
     tool_id = f"tc_{len(ctx.context.events)+1}"
-    args = {"runtime": runtime, "ports": ports, "timeout_ms": timeout_ms}
+    args = {"runtime": runtime, "ports": ports, "timeout_ms": timeout_ms, "name": name}
     ctx.context.events.append(
         {
             "phase": "started",
@@ -572,6 +673,8 @@ async def sandbox_create(
             "arguments": args,
         }
     )
+
+    sb_name = _normalize_sandbox_name(ctx, name)
 
     # Synthetic Ruby runtime: if a ruby runtime is requested, create on a Node runtime
     requested_runtime = runtime
@@ -586,8 +689,16 @@ async def sandbox_create(
         runtime=effective_runtime,
         ports=ports,
     )
+    # Map and set active sandbox
+    ctx.context.sandbox_name_to_id[sb_name] = sandbox.sandbox_id
+    ctx.context.active_sandbox = sb_name
+    # Persist preferences per-sandbox
+    if requested_runtime or effective_runtime:
+        ctx.context.sandbox_runtime_map[sb_name] = (requested_runtime or effective_runtime)  # type: ignore[arg-type]
+    if ports is not None:
+        ctx.context.sandbox_ports_map[sb_name] = ports
+    # Update legacy single-sandbox fields for back-compat (point to last created)
     ctx.context.sandbox_id = sandbox.sandbox_id
-    # Preserve the originally requested runtime in context; we'll treat it as fulfilled synthetically
     ctx.context.sandbox_runtime = requested_runtime or effective_runtime
     ctx.context.sandbox_ports = ports
     _SANDBOX_CACHE[sandbox.sandbox_id] = sandbox
@@ -596,7 +707,7 @@ async def sandbox_create(
     synced = 0
     try:
         synced = await _sync_project_files(ctx, sandbox)
-        await _snapshot_files_into_context(ctx, sandbox)
+        await _snapshot_files_into_context_named(ctx, sandbox, sb_name)
         ctx.context.events.append(
             {
                 "phase": "log",
@@ -728,6 +839,13 @@ async def sandbox_create(
 
             # Set default env for future runs so `bundle install` uses vendor/bundle
             try:
+                per_env = dict(ctx.context.sandbox_envs.get(sb_name, {}))
+                per_env.update({
+                    "BUNDLE_PATH": "vendor/bundle",
+                    "PATH": f"/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/share/gems/bin:/usr/share/ruby3.2-gems/bin:/home/vercel-sandbox/.local/share/gem/ruby/bin:/home/vercel-sandbox/.gem/ruby/bin:{sandbox.sandbox.cwd}/bin",
+                })
+                ctx.context.sandbox_envs[sb_name] = per_env
+                # Back-compat global defaults too
                 ctx.context.sandbox_env.update({
                     "BUNDLE_PATH": "vendor/bundle",
                     "PATH": f"/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/share/gems/bin:/usr/share/ruby3.2-gems/bin:/home/vercel-sandbox/.local/share/gem/ruby/bin:/home/vercel-sandbox/.gem/ruby/bin:{sandbox.sandbox.cwd}/bin",
@@ -759,6 +877,7 @@ async def sandbox_create(
         "runtime": requested_runtime or effective_runtime,
         "ports": ports,
         "synced_files": synced,
+        "name": sb_name,
         **({"synthetic_runtime": True, "effective_runtime": effective_runtime} if is_synthetic_ruby else {}),
     }
     ctx.context.events.append(
@@ -773,23 +892,25 @@ async def sandbox_create(
 
 
 @function_tool
-async def sandbox_stop(ctx: RunContextWrapper[IDEContext]) -> str:
-    """Stop and release the current sandbox if any."""
+async def sandbox_stop(ctx: RunContextWrapper[IDEContext], name: Optional[str] = None) -> str:
+    """Stop and release the specified sandbox (or active/default if none provided)."""
     tool_id = f"tc_{len(ctx.context.events)+1}"
+    args = {"name": name}
     ctx.context.events.append(
         {
             "phase": "started",
             "tool_id": tool_id,
             "name": "sandbox_stop",
-            "arguments": {},
+            "arguments": args,
         }
     )
-    sid = ctx.context.sandbox_id
+    sb_name = _normalize_sandbox_name(ctx, name)
+    sid = (ctx.context.sandbox_name_to_id or {}).get(sb_name) or (ctx.context.sandbox_id if sb_name == "default" else None)
     if not sid:
         output = {"stopped": False, "error": "no sandbox"}
     else:
         try:
-            sandbox = await _get_sandbox(ctx)
+            sandbox = _SANDBOX_CACHE.get(sid) or await Sandbox.get(sandbox_id=sid)
             await sandbox.stop()
             try:
                 await Sandbox.get(sandbox_id=sid)  # best-effort refresh
@@ -801,7 +922,13 @@ async def sandbox_stop(ctx: RunContextWrapper[IDEContext]) -> str:
             except Exception:
                 pass
             _SANDBOX_CACHE.pop(sid, None)
-            ctx.context.sandbox_id = None
+            # Clear mappings
+            if sb_name in (ctx.context.sandbox_name_to_id or {}):
+                ctx.context.sandbox_name_to_id.pop(sb_name, None)
+            if ctx.context.active_sandbox == sb_name:
+                ctx.context.active_sandbox = None
+            if sb_name == "default":
+                ctx.context.sandbox_id = None
             output = {"stopped": True}
         except Exception as e:
             output = {"stopped": False, "error": str(e)}
@@ -852,7 +979,8 @@ async def sandbox_run(
     """
     tool_id = f"tc_{len(ctx.context.events)+1}"
 
-    sandbox = await _get_sandbox(ctx)
+    sb_name = _normalize_sandbox_name(ctx, name)
+    sandbox = await _get_sandbox_by_name(ctx, sb_name)
     # Resolve cwd safely: default to sandbox cwd; allow only subdirs under it
     requested_cwd = cwd
     base_cwd = sandbox.sandbox.cwd
@@ -922,7 +1050,7 @@ async def sandbox_run(
         "port": port,
         "wait_timeout_ms": wait_timeout_ms,
         "stream_logs": stream_logs,
-        "name": name,
+        "name": sb_name,
     }
     ctx.context.events.append(
         {
@@ -958,7 +1086,8 @@ async def sandbox_run(
             )
 
     # Parse list-form env (e.g., ["KEY=VALUE"]) into a dict and merge with defaults
-    full_env = {**(ctx.context.sandbox_env or {}), **(_parse_env_list(env) if env else {})}
+    per_env = (ctx.context.sandbox_envs or {}).get(sb_name, {})
+    full_env = {**(ctx.context.sandbox_env or {}), **per_env, **(_parse_env_list(env) if env else {})}
     cd_prefix = f"cd {safe_cwd} && "
 
     # Heuristics: if this looks like a Python task (pip/python/uvicorn), ensure python + pip are ready
@@ -1267,7 +1396,7 @@ async def sandbox_run(
                                             "phase": "log",
                                             "tool_id": tool_id,
                                             "name": "sandbox_run",
-                                            "data": f"Preview available at: {url}\n",
+                                            "data": f"[{sb_name}] Preview available at: {url}\n",
                                         }
                                     )
                             stop_event.set()
@@ -1456,7 +1585,7 @@ async def sandbox_run(
         files_total = len(fs.get("files") or [])
 
         parts = [
-            "sandbox_run completed",
+            f"sandbox_run completed (name={sb_name})",
             f"status={status}",
             *( [f"preview_url={output.get('preview_url')}"] if output.get("preview_url") else [] ),
             *( [f"exit_code={output.get('exit_code')}"] if output.get("exit_code") is not None else [] ),
@@ -1473,7 +1602,7 @@ async def sandbox_run(
 # Simple helper for the agent to emit a preview URL for the running sandbox
 @function_tool
 async def sandbox_show_preview(
-    ctx: RunContextWrapper[IDEContext], url: str, port: Optional[int] = None, label: Optional[str] = None
+    ctx: RunContextWrapper[IDEContext], url: str, port: Optional[int] = None, label: Optional[str] = None, name: Optional[str] = None
 ) -> str:
     """Emit a preview URL for the active sandbox so the UI can render it.
 
@@ -1485,7 +1614,8 @@ async def sandbox_show_preview(
         JSON with preview info.
     """
     tool_id = f"tc_{len(ctx.context.events)+1}"
-    args = {"url": url, "port": port, "label": label}
+    sb_name = _normalize_sandbox_name(ctx, name)
+    args = {"url": url, "port": port, "label": label, "name": sb_name}
     ctx.context.events.append(
         {
             "phase": "started",
@@ -1494,7 +1624,7 @@ async def sandbox_show_preview(
             "arguments": args,
         }
     )
-    output = {"url": url, **({"port": port} if port else {}), **({"label": label} if label else {})}
+    output = {"url": url, **({"port": port} if port else {}), **({"label": label} if label else {}), "name": sb_name}
     ctx.context.events.append(
         {
             "phase": "completed",
@@ -1508,10 +1638,11 @@ async def sandbox_show_preview(
 
 
 @function_tool
-async def sandbox_set_env(ctx: RunContextWrapper[IDEContext], env: List[str]) -> str:
-    """Set default environment variables for subsequent sandbox_run commands."""
+async def sandbox_set_env(ctx: RunContextWrapper[IDEContext], env: List[str], name: Optional[str] = None) -> str:
+    """Set default environment variables for subsequent sandbox_run commands for a named sandbox (or active/default)."""
     tool_id = f"tc_{len(ctx.context.events)+1}"
-    args = {"env": env}
+    sb_name = _normalize_sandbox_name(ctx, name)
+    args = {"env": env, "name": sb_name}
     ctx.context.events.append(
         {
             "phase": "started",
@@ -1521,8 +1652,15 @@ async def sandbox_set_env(ctx: RunContextWrapper[IDEContext], env: List[str]) ->
         }
     )
     parsed = _parse_env_list(env)
+    # Back-compat: also update global
     ctx.context.sandbox_env.update(parsed)
-    output = {"ok": True, "env_keys": list(parsed.keys())}
+    # Per-sandbox env
+    per_env = dict(ctx.context.sandbox_envs.get(sb_name, {}))
+    for k, v in parsed.items():
+        if k not in per_env:
+            per_env[k] = v
+    ctx.context.sandbox_envs[sb_name] = per_env
+    output = {"ok": True, "env_keys": list(parsed.keys()), "name": sb_name}
     ctx.context.events.append(
         {
             "phase": "completed",

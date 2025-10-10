@@ -24,7 +24,7 @@
   --vscode-success: #10b981;       /* emerald-500 */
   --vscode-danger: #ef4444;        /* red-500 */
   /* Unified app header height */
-  --header-height: 2.25rem;
+  --header-height: 3rem;
   /* Status bar height */
   --statusbar-height: 26px;
 

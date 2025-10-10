@@ -11,6 +11,7 @@ interface UseChatProps {
   cancelling: boolean;
   project: Record<string, string>;
   proposals?: Record<string, string>;
+  projectId: string;
   setInput: (input: string) => void;
   setLoading: (loading: boolean) => void;
   setCurrentTaskId: (taskId: string | null) => void;
@@ -26,6 +27,7 @@ export const useChat = ({
   cancelling,
   project,
   proposals,
+  projectId,
   setInput,
   setLoading,
   setCurrentTaskId,
@@ -48,6 +50,7 @@ export const useChat = ({
     const message_history = runOrder.flatMap((id) => {
       const run = runs[id];
       if (!run) return [] as { role: string; content: string }[];
+      if (run.projectId !== projectId) return [] as { role: string; content: string }[];
       const messages: { role: string; content: string }[] = [];
       for (const a of run.actions) {
         if (a.kind === 'user_message') messages.push({ role: 'user', content: (a as Action & { content: string }).content });
@@ -76,7 +79,7 @@ export const useChat = ({
 
     if (res.ok) {
       const { task_id, stream_token } = await res.json();
-      createRun(task_id, input);
+      createRun(task_id, input, projectId);
       setCurrentTaskId(task_id);
 
       // store user message action
@@ -95,7 +98,7 @@ export const useChat = ({
       console.error('enqueue failed');
       setLoading(false);
     }
-  }, [input, isAuthenticated, openModal, userId, project, proposals, setInput, setLoading, createRun, addAction, setCurrentTaskId, runs, runOrder, stream, model]);
+  }, [input, isAuthenticated, openModal, userId, project, proposals, projectId, setInput, setLoading, createRun, addAction, setCurrentTaskId, runs, runOrder, stream, model]);
 
   const cancelCurrentTask = useCallback(() => {
     if (!currentTaskId || cancelling) return;

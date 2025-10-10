@@ -1,5 +1,5 @@
 import React from 'react';
-import { MessageSquare, Loader, Box, Code2, Cpu, Gem } from 'lucide-react';
+import { MessageSquare, Loader, Box, Code2, Cpu, Gem, ExternalLink } from 'lucide-react';
 import type { Action, ExecResultAction } from '../types/run';
 
 interface TimelineProps {
@@ -264,7 +264,9 @@ const PreviewCard: React.FC<{ url: string; origin: string }> = ({ url, origin })
               {origin}
             </div>
           </div>
-          <a href={url} target="_blank" rel="noreferrer" className="underline" style={{ color: 'var(--vscode-accent)' }}>open</a>
+          <a href={url} target="_blank" rel="noreferrer" className="p-1 rounded hover:bg-opacity-10 hover:bg-white transition-colors" style={{ color: 'var(--vscode-accent)' }} title="Open in new tab">
+            <ExternalLink className="w-4 h-4" />
+          </a>
         </div>
         {!collapsed && (
           <iframe src={url} title="Preview" style={{ width: '100%', height: 220, border: 'none', background: '#ffffff', colorScheme: 'light' }} />
@@ -282,6 +284,20 @@ const MiniTerminal: React.FC<{
   output?: string;
 }> = ({ command, cwd, status, output }) => {
   const [open, setOpen] = React.useState(false);
+  const scrollRef = React.useRef<HTMLPreElement | null>(null);
+  const tailText = React.useMemo(() => {
+    const lines = (output || '').split('\n');
+    return lines.slice(Math.max(0, lines.length - 2)).join('\n');
+  }, [output]);
+
+  React.useEffect(() => {
+    if (open && scrollRef.current) {
+      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+    }
+  }, [open, output]);
+
+  const lineHeightEm = 1.2; // keep in sync with pre style
+
   return (
     <div className="text-xs" style={{ border: '1px solid var(--vscode-panel-border)', borderRadius: 6, overflow: 'hidden', background: 'var(--vscode-panel)' }}>
       <div className="flex items-center justify-between px-2 py-1" style={{ background: 'var(--vscode-surface)', borderBottom: '1px solid var(--vscode-panel-border)' }}>
@@ -296,9 +312,38 @@ const MiniTerminal: React.FC<{
       <pre className="m-0 p-2 font-mono whitespace-pre-wrap" style={{ color: 'var(--vscode-text)' }}>
         <code>{command}</code>
       </pre>
+      {!open && Boolean(tailText) && (
+        // Show the two-line live tail only while the command is running
+        status === 'running' ? (
+        <div style={{ borderTop: '1px dashed var(--vscode-panel-border)', position: 'relative' }} aria-live="polite">
+          <div style={{ height: `calc(${2 * lineHeightEm}em + 4px)`, overflow: 'hidden', position: 'relative' }}>
+            <pre
+              className="m-0 px-2 py-0.5 font-mono text-xs whitespace-pre-wrap"
+              style={{
+                color: 'var(--vscode-subtle)',
+                lineHeight: `${lineHeightEm}em`,
+              }}
+            >
+              <code>{tailText}</code>
+            </pre>
+            <div
+              style={{
+                position: 'absolute',
+                left: 0,
+                right: 0,
+                top: 0,
+                height: 12,
+                background: 'linear-gradient(180deg, var(--vscode-panel) 0%, rgba(0,0,0,0) 85%)',
+                pointerEvents: 'none',
+              }}
+            />
+          </div>
+        </div>
+        ) : null
+      )}
       {open && (
         <div style={{ borderTop: '1px dashed var(--vscode-panel-border)' }}>
-          <pre className="m-0 p-2 font-mono text-xs whitespace-pre-wrap" style={{ color: 'var(--vscode-subtle)', maxHeight: 240, overflow: 'auto' }}>
+          <pre ref={scrollRef} className="m-0 p-2 font-mono text-xs whitespace-pre-wrap" style={{ color: 'var(--vscode-subtle)', maxHeight: 240, overflow: 'auto' }}>
             <code>{output || ''}</code>
           </pre>
         </div>

@@ -108,6 +108,7 @@ DEFAULT_AGENT_IGNORE_PATTERNS: list[str] = [
     ".cache/",
     ".next/",
     "public/assets/",
+    ".git/",
 ]
 
 

@@ -4,7 +4,7 @@ import type { Run, Action } from '../types/run';
 interface RunContextValue {
   runs: Record<string, Run>;
   runOrder: string[];
-  createRun: (runId: string, userPrompt: string) => void;
+  createRun: (runId: string, userPrompt: string, projectId?: string) => void;
   addAction: (runId: string, action: Action) => void;
   updateAction: (runId: string, actionId: string, updater: (prev: Action | undefined) => Action) => void;
   appendActionLog: (runId: string, actionId: string, line: string) => void;
@@ -20,12 +20,12 @@ interface RunState {
 function runReducer(state: RunState, action: { type: string; payload: unknown }): RunState {
   switch (action.type) {
     case 'create': {
-      const { id, prompt } = action.payload as { id: string; prompt: string };
+      const { id, prompt, projectId } = action.payload as { id: string; prompt: string; projectId?: string };
       if (state.runs[id]) return state;
       return {
         runs: {
           ...state.runs,
-          [id]: { id, userPrompt: prompt, actions: [] },
+          [id]: { id, userPrompt: prompt, projectId, actions: [] },
         },
         order: [...state.order, id],
       };
@@ -85,8 +85,8 @@ function runReducer(state: RunState, action: { type: string; payload: unknown })
 export const RunProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [state, dispatch] = React.useReducer(runReducer, { runs: {}, order: [] } as RunState);
 
-  const createRun = React.useCallback((runId: string, userPrompt: string) => {
-    dispatch({ type: 'create', payload: { id: runId, prompt: userPrompt } });
+  const createRun = React.useCallback((runId: string, userPrompt: string, projectId?: string) => {
+    dispatch({ type: 'create', payload: { id: runId, prompt: userPrompt, projectId } });
   }, []);
 
   const addAction = React.useCallback((runId: string, action: Action) => {

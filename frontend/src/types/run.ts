@@ -73,5 +73,7 @@ export type Action =
 export interface Run {
   id: string;
   userPrompt: string;
+  // Project scoping for multi-project tabs
+  projectId?: string;
   actions: Action[];
 } 

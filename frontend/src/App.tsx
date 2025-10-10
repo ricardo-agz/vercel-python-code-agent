@@ -18,6 +18,8 @@ import { useAuth } from './context/AuthContext';
 import StatusBar from './components/StatusBar';
 import AccountMenu from './components/AccountMenu';
 import { CodeFixModal } from './components/CodeFixModal';
+import ProjectTabs, { type ProjectTab } from './components/ProjectTabs';
+import NewProjectModal from './components/NewProjectModal';
 
 type ResizableCenterProps = {
   code: string;
@@ -254,30 +256,110 @@ function App() {
   const play = usePlay();
   const { isAuthenticated, user, openModal } = useAuth();
 
-  // Project: mapping of file path -> content
-  const [project, setProject] = useState<Record<string, string>>(STARTER_PROJECT);
-  const [activeFile, setActiveFile] = useState<string>('main.py');
-  const [folders, setFolders] = useState<string[] | undefined>(undefined);
+  // Multi-project state
+  const initialProjectId = React.useMemo(() => `proj_${Date.now().toString(36)}_${Math.random().toString(36).slice(2,7)}`, []);
+  const [projects, setProjects] = useState<ProjectTab[]>([{ id: initialProjectId, name: 'Project 1' }]);
+  const [activeProjectId, setActiveProjectId] = useState<string>(initialProjectId);
+  const [showNewProject, setShowNewProject] = useState<boolean>(false);
+
+  type ProjectState = {
+    files: Record<string, string>;
+    proposals: Record<string, string>;
+    activeFile: string;
+    folders?: string[];
+    expandedFolders: string[];
+    input: string;
+    loading: boolean;
+    currentTaskId: string | null;
+    cancelling: boolean;
+    model: string;
+    codeFix: { fileName: string; startLine: number; endLine: number; selectedCode: string } | null;
+  };
+
+  const [projectStates, setProjectStates] = useState<Record<string, ProjectState>>(() => ({
+    [initialProjectId]: {
+      files: STARTER_PROJECT,
+      proposals: {},
+      activeFile: 'main.py',
+      folders: undefined,
+      expandedFolders: [],
+      input: '',
+      loading: false,
+      currentTaskId: null,
+      cancelling: false,
+      model: 'anthropic/claude-sonnet-4.5',
+      codeFix: null,
+    },
+  }));
+
+  const activeState = projectStates[activeProjectId];
+  const project = activeState.files;
+  const proposals = activeState.proposals;
+  const activeFile = activeState.activeFile;
+  const folders = activeState.folders;
+  const expandedFolders = activeState.expandedFolders;
+  const input = activeState.input;
+  const loading = activeState.loading;
+  const currentTaskId = activeState.currentTaskId;
+  const cancelling = activeState.cancelling;
+  const model = activeState.model;
+  const codeFix = activeState.codeFix;
+  const nextProjectName = React.useMemo(() => `Project ${projects.length + 1}`, [projects.length]);
+
+  const setProject = (updater: (prev: Record<string, string>) => Record<string, string>) => {
+    setProjectStates(prev => ({
+      ...prev,
+      [activeProjectId]: { ...prev[activeProjectId], files: updater(prev[activeProjectId].files) },
+    }));
+  };
+  const setProposals = React.useCallback((updater: (prev: Record<string, string>) => Record<string, string>) => {
+    setProjectStates(prev => ({
+      ...prev,
+      [activeProjectId]: { ...prev[activeProjectId], proposals: updater(prev[activeProjectId].proposals) },
+    }));
+  }, [activeProjectId]);
+  const setActiveFile = (file: string) => {
+    setProjectStates(prev => ({ ...prev, [activeProjectId]: { ...prev[activeProjectId], activeFile: file } }));
+  };
+  const setFolders = (updater: (prev: string[] | undefined) => string[] | undefined) => {
+    setProjectStates(prev => ({ ...prev, [activeProjectId]: { ...prev[activeProjectId], folders: updater(prev[activeProjectId].folders) } }));
+  };
+  const setExpandedFolders = (paths: string[]) => {
+    setProjectStates(prev => ({ ...prev, [activeProjectId]: { ...prev[activeProjectId], expandedFolders: paths } }));
+  };
+  const setInput = React.useCallback((next: string) => {
+    setProjectStates(prev => ({ ...prev, [activeProjectId]: { ...prev[activeProjectId], input: next } }));
+  }, [activeProjectId]);
+  const setLoading = (next: boolean) => {
+    setProjectStates(prev => ({ ...prev, [activeProjectId]: { ...prev[activeProjectId], loading: next } }));
+  };
+  const setCurrentTaskId = (next: string | null) => {
+    setProjectStates(prev => ({ ...prev, [activeProjectId]: { ...prev[activeProjectId], currentTaskId: next } }));
+  };
+  const setCancelling = (next: boolean) => {
+    setProjectStates(prev => ({ ...prev, [activeProjectId]: { ...prev[activeProjectId], cancelling: next } }));
+  };
+  const setModel = (next: string) => {
+    setProjectStates(prev => ({ ...prev, [activeProjectId]: { ...prev[activeProjectId], model: next } }));
+  };
+  const setCodeFix = React.useCallback((next: ProjectState['codeFix']) => {
+    setProjectStates(prev => ({ ...prev, [activeProjectId]: { ...prev[activeProjectId], codeFix: next } }));
+  }, [activeProjectId]);
+
   const code = project[activeFile] ?? '';
   const setCode = (next: string) => setProject(prev => ({ ...prev, [activeFile]: next }));
-  // Proposed changes per file from the agent
-  const [proposals, setProposals] = useState<Record<string, string>>({});
   const upsertProposal = React.useCallback((filePath: string, newContent: string) => {
     setProposals(prev => ({ ...prev, [filePath]: newContent }));
-  }, []);
+  }, [setProposals]);
   const clearProposal = React.useCallback((filePath: string) => {
     setProposals(prev => {
-      const next = { ...prev };
+      const next = { ...prev } as Record<string,string>;
       delete next[filePath];
       return next;
     });
-  }, []);
+  }, [setProposals]);
   
-  const [input, setInput] = useState('');
-  const [loading, setLoading] = useState(false);
-  const [currentTaskId, setCurrentTaskId] = useState<string | null>(null);
-  const [cancelling, setCancelling] = useState(false);
-  const [model, setModel] = useState<string>('anthropic/claude-sonnet-4.5');
+  // input/loading/currentTaskId/cancelling/model now scoped per project
   // Sidebar resizing
   // Track if we're currently processing a code-execution decision
   const [executingCode, setExecutingCode] = useState(false);
@@ -296,18 +378,13 @@ function App() {
   // Runs context
   const { runs, runOrder, updateAction } = useRuns();
   // Code-fix modal state
-  const [codeFix, setCodeFix] = useState<{
-    fileName: string;
-    startLine: number;
-    endLine: number;
-    selectedCode: string;
-  } | null>(null);
+  // codeFix scoped per project
 
   const openCodeFix = React.useCallback((args: { fileName: string; startLine: number; endLine: number; selectedCode: string }) => {
     setCodeFix(args);
-  }, []);
+  }, [setCodeFix]);
 
-  const closeCodeFix = React.useCallback(() => setCodeFix(null), []);
+  const closeCodeFix = React.useCallback(() => setCodeFix(null), [setCodeFix]);
 
   // Declare placeholder for send function; assign later after hook is initialized
   const submitCodeFixRef = React.useRef<null | ((instruction: string) => Promise<void>)>(null);
@@ -316,8 +393,12 @@ function App() {
   }, []);
 
   const timelineActions = React.useMemo(() => {
-    return runOrder.flatMap(id => runs[id]?.actions || []);
-  }, [runOrder, runs]);
+    return runOrder
+      .map(id => runs[id])
+      .filter((r): r is typeof runs[string] => Boolean(r))
+      .filter(run => (run.projectId || undefined) === activeProjectId)
+      .flatMap(run => run.actions || []);
+  }, [runOrder, runs, activeProjectId]);
 
   // Build an ignore matcher from .agentignore + .gitignore and defaults
   const gitignoreText = project['.gitignore'] || '';
@@ -343,7 +424,9 @@ function App() {
         const dir = pattern.slice(0, -1);
         return (p: string) => {
           const n = (p || '').replace(/^\//, '');
-          return n === dir || n.startsWith(dir + '/');
+          if (n === dir || n.startsWith(dir + '/')) return true; // root-level
+          // match anywhere: "/dir/" occurrence in the path
+          return n.split('/').includes(dir);
         };
       }
 
@@ -366,7 +449,9 @@ function App() {
       return (p: string) => {
         const n = (p || '').replace(/^\//, '');
         const base = n.split('/').pop() || n;
-        return regex.test(base);
+        if (regex.test(base)) return true; // basename match
+        // Also allow pattern to match any full segment for safety (e.g., *.log won't, but foo* might)
+        return n.split('/').some(seg => regex.test(seg));
       };
     };
 
@@ -537,6 +622,7 @@ function App() {
     cancelling,
     project: projectForSend,
     proposals: proposalsForSend,
+    projectId: activeProjectId,
     setInput,
     setLoading,
     setCurrentTaskId,
@@ -558,7 +644,7 @@ function App() {
         await sendPrompt();
       }
     };
-  }, [codeFix, setInput, loading, isAuthenticated, openModal, sendPrompt]);
+  }, [codeFix, setInput, loading, isAuthenticated, openModal, sendPrompt, setCodeFix]);
   const handleRun = React.useCallback(() => {
     const merged: Record<string, string> = { ...project };
     // If a proposal exists for active file and is visible, prefer current editor content via code state
@@ -692,7 +778,43 @@ function App() {
 
   return (
     <>
-    <ThreePane
+      {/* Top header is provided via ThreePane.header; remove any duplicate header here */}
+      <ThreePane
+        header={(
+          <ProjectTabs
+            projects={projects}
+            activeProjectId={activeProjectId}
+            onSelect={(id) => {
+              if (id === activeProjectId) return;
+              // Stop any running play session on switch
+              if (play.status === 'running' || play.status === 'starting') {
+                play.stop();
+              }
+              setActiveProjectId(id);
+            }}
+            onAdd={() => {
+              setShowNewProject(true);
+            }}
+            onRename={(id, name) => {
+              if (!name || !name.trim()) return;
+              setProjects(prev => prev.map(p => (p.id === id ? { ...p, name: name.trim() } : p)));
+            }}
+            onDelete={(id) => {
+              if (!window.confirm('Delete this project? This cannot be undone in this session.')) return;
+              setProjects(prev => prev.filter(p => p.id !== id));
+              setProjectStates(prev => {
+                const next = { ...prev } as Record<string, ProjectState>;
+                delete next[id];
+                return next;
+              });
+              if (activeProjectId === id) {
+                const remaining = projects.filter(p => p.id !== id);
+                const nextActive = remaining[0]?.id;
+                if (nextActive) setActiveProjectId(nextActive);
+              }
+            }}
+          />
+        )}
       left={(
         <FileTree
           project={projectForTree}
@@ -802,6 +924,8 @@ function App() {
           }}
           proposed={proposalsForTree}
           folders={folders}
+            expandedPaths={expandedFolders}
+            onExpandedChange={setExpandedFolders}
           onRenameFolder={(oldPath, newPath) => {
             const normalizedOld = oldPath.replace(/\/$/,'');
             const normalizedNew = newPath.replace(/^\//,'');
@@ -937,6 +1061,33 @@ function App() {
     />
     <AuthModal />
     <AccountMenu />
+    <NewProjectModal
+      visible={showNewProject}
+      defaultName={nextProjectName}
+      onClose={() => setShowNewProject(false)}
+      onCreate={(name) => {
+        const id = `proj_${Date.now().toString(36)}_${Math.random().toString(36).slice(2,7)}`;
+        setProjects(prev => [...prev, { id, name }]);
+        setProjectStates(prev => ({
+          ...prev,
+          [id]: {
+            files: { 'main.py': STARTER_PROJECT['main.py'], 'requirements.txt': STARTER_PROJECT['requirements.txt'] },
+            proposals: {},
+            activeFile: 'main.py',
+            folders: undefined,
+            expandedFolders: [],
+            input: '',
+            loading: false,
+            currentTaskId: null,
+            cancelling: false,
+            model: 'anthropic/claude-sonnet-4.5',
+            codeFix: null,
+          },
+        }));
+        setActiveProjectId(id);
+        setShowNewProject(false);
+      }}
+    />
     <CodeFixModal
       visible={!!codeFix}
       fileName={codeFix?.fileName || ''}

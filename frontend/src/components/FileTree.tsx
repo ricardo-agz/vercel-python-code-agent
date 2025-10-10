@@ -18,6 +18,9 @@ interface FileTreeProps {
   folders?: string[]; // explicit folders to render (even if empty)
   onRenameFolder: (oldPath: string, newPath: string) => void;
   onDeleteFolder: (path: string) => void;
+  // Controlled expansion (optional). If provided, component treats expansion as controlled.
+  expandedPaths?: string[];
+  onExpandedChange?: (next: string[]) => void;
 }
 
 type TreeNode = { name: string; path: string; type: 'file' | 'folder'; children?: TreeNode[] };
@@ -119,13 +122,22 @@ function buildTree(paths: string[], folders?: string[]): TreeNode {
   return root;
 }
 
-export const FileTree: React.FC<FileTreeProps> = ({ project, activeFile, onSelect, onCreateFile, onCreateFolder, onRename, onDelete, onMoveFile, onMoveFolder, proposed, folders, onRenameFolder, onDeleteFolder }) => {
+export const FileTree: React.FC<FileTreeProps> = ({ project, activeFile, onSelect, onCreateFile, onCreateFolder, onRename, onDelete, onMoveFile, onMoveFolder, proposed, folders, onRenameFolder, onDeleteFolder, expandedPaths, onExpandedChange }) => {
   const [contextMenu, setContextMenu] = React.useState<ContextMenuState>(null);
   const [dragOver, setDragOver] = React.useState<string | 'root' | null>(null);
   const [expanded, setExpanded] = React.useState<Set<string>>(() => new Set());
   const [creating, setCreating] = React.useState<{ type: 'file' | 'folder'; parent: string; name: string } | null>(null);
   const [renaming, setRenaming] = React.useState<{ type: 'file' | 'folder'; path: string; name: string } | null>(null);
   const inputRef = React.useRef<HTMLInputElement | null>(null);
+  const expandedSet = React.useMemo(() => (expandedPaths ? new Set(expandedPaths) : expanded), [expandedPaths, expanded]);
+  const setExpandedInternal = React.useCallback((updater: (prev: Set<string>) => Set<string>) => {
+    if (onExpandedChange) {
+      const next = updater(expandedSet);
+      onExpandedChange(Array.from(next));
+    } else {
+      setExpanded(prev => updater(prev));
+    }
+  }, [onExpandedChange, expandedSet]);
   const treeRoot = React.useMemo(() => {
     const keys = new Set<string>(Object.keys(project));
     if (proposed) {
@@ -141,31 +153,17 @@ export const FileTree: React.FC<FileTreeProps> = ({ project, activeFile, onSelec
     return buildTree(Array.from(keys), uniqFolders);
   }, [project, proposed, folders]);
 
-  // Ensure new folders are expanded by default
-  React.useEffect(() => {
-    const found = new Set<string>();
-    const walk = (n: TreeNode) => {
-      if (n.type === 'folder' && n.path) found.add(n.path);
-      (n.children || []).forEach(walk);
-    };
-    walk(treeRoot);
-    setExpanded(prev => {
-      const next = new Set(prev);
-      found.forEach(p => { if (!next.has(p)) next.add(p); });
-      // Remove expansions for folders that no longer exist
-      Array.from(next).forEach(p => { if (!found.has(p)) next.delete(p); });
-      return next;
-    });
-  }, [treeRoot]);
+  // Do not alter expansion on tree rebuild; only user actions modify expansion state.
+  // We intentionally avoid syncing with treeRoot to prevent agent updates from toggling folders.
 
-  const isExpanded = React.useCallback((path: string) => expanded.has(path), [expanded]);
+  const isExpanded = React.useCallback((path: string) => expandedSet.has(path), [expandedSet]);
   const toggleExpanded = React.useCallback((path: string) => {
-    setExpanded(prev => {
+    setExpandedInternal(prev => {
       const next = new Set(prev);
       if (next.has(path)) next.delete(path); else next.add(path);
       return next;
     });
-  }, []);
+  }, [setExpandedInternal]);
 
   const creatingKey = React.useMemo(() => creating ? `${creating.type}:${creating.parent}` : '', [creating]);
   React.useEffect(() => {
@@ -188,13 +186,13 @@ export const FileTree: React.FC<FileTreeProps> = ({ project, activeFile, onSelec
   const startCreate = React.useCallback((type: 'file' | 'folder', parent: string) => {
     setCreating({ type, parent, name: '' });
     if (parent) {
-      setExpanded(prev => {
+      setExpandedInternal(prev => {
         const next = new Set(prev);
         next.add(parent);
         return next;
       });
     }
-  }, []);
+  }, [setExpandedInternal]);
 
   const startRename = React.useCallback((type: 'file' | 'folder', path: string) => {
     const parts = path.split('/');
@@ -236,7 +234,7 @@ export const FileTree: React.FC<FileTreeProps> = ({ project, activeFile, onSelec
       const normalized = nextPath.replace(/^\//, '');
       if (normalized !== renaming.path) {
         onRenameFolder(renaming.path, normalized);
-        setExpanded(prev => {
+        setExpandedInternal(prev => {
           const s = new Set(prev);
           if (s.has(renaming.path)) {
             s.delete(renaming.path);
@@ -247,7 +245,7 @@ export const FileTree: React.FC<FileTreeProps> = ({ project, activeFile, onSelec
       }
     }
     setRenaming(null);
-  }, [renaming, onRename, onRenameFolder]);
+  }, [renaming, onRename, onRenameFolder, setExpandedInternal]);
 
   const cancelRename = React.useCallback(() => setRenaming(null), []);
 
