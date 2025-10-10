@@ -33,9 +33,10 @@ type ResizableCenterProps = {
   terminalLogs: string;
   onClearLogs: () => void;
   onRequestCodeFix?: (args: { fileName: string; startLine: number; endLine: number; selectedCode: string }) => void;
+  isIgnored?: (path: string) => boolean;
 };
 
-const ResizableCenter: React.FC<ResizableCenterProps> = ({ code, setCode, proposals, clearProposal, activeFile, onRun, running, onStop, previewUrl, onOpenPreview, terminalLogs, onClearLogs, onRequestCodeFix }) => {
+const ResizableCenter: React.FC<ResizableCenterProps> = ({ code, setCode, proposals, clearProposal, activeFile, onRun, running, onStop, previewUrl, onOpenPreview, terminalLogs, onClearLogs, onRequestCodeFix, isIgnored }) => {
   const containerRef = React.useRef<HTMLDivElement>(null);
   const [terminalHeight, setTerminalHeight] = React.useState<number>(200);
   const [resizing, setResizing] = React.useState<boolean>(false);
@@ -84,7 +85,7 @@ const ResizableCenter: React.FC<ResizableCenterProps> = ({ code, setCode, propos
         <EditorPane
           code={code}
           setCode={(v) => setCode(v)}
-          proposedContent={proposals[activeFile] ?? null}
+          proposedContent={(isIgnored && isIgnored(activeFile)) ? null : (proposals[activeFile] ?? null)}
           onAcceptProposal={(newContent) => {
             setCode(newContent);
             clearProposal(activeFile);
@@ -232,6 +233,22 @@ pydantic>=2
 // Generate a unique user ID for this session
 const USER_ID = `user_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
 
+// Default patterns to hide from the diff view while still showing in the tree
+const DEFAULT_DIFF_IGNORE_PATTERNS: string[] = [
+  '__pycache__/',
+  '*.pyc',
+  '*.pyo',
+  '*.pyd',
+  '.DS_Store',
+  'node_modules/',
+  'vendor/',
+  'Gemfile.lock',
+  'package-lock.json',
+  'pnpm-lock.yaml',
+  'yarn.lock',
+  '*.log',
+];
+
 function App() {
   // Sandbox play hook for remote execution
   const play = usePlay();
@@ -302,12 +319,101 @@ function App() {
     return runOrder.flatMap(id => runs[id]?.actions || []);
   }, [runOrder, runs]);
 
+  // Build an ignore matcher from .agentignore + .gitignore and defaults
+  const gitignoreText = project['.gitignore'] || '';
+  const agentignoreText = project['.agentignore'] || '';
+  const isPathIgnored = React.useMemo(() => {
+    // Convert basic .gitignore-style patterns into predicate functions
+    // Supported: trailing-slash folders, simple filenames, and basic * globs on basenames
+    const sanitize = (s: string) => s.trim();
+    const linesGit = gitignoreText
+      ? gitignoreText.split(/\r?\n/).map(sanitize).filter(l => l && !l.startsWith('#'))
+      : [];
+    const linesAgent = agentignoreText
+      ? agentignoreText.split(/\r?\n/).map(sanitize).filter(l => l && !l.startsWith('#'))
+      : [];
+    const patterns = [...DEFAULT_DIFF_IGNORE_PATTERNS, ...linesGit, ...linesAgent];
+
+    const toPredicate = (pat: string) => {
+      const pattern = pat.replace(/^\//, '').trim();
+      if (!pattern) return () => false;
+
+      // Directory pattern (e.g. node_modules/ or __pycache__/)
+      if (pattern.endsWith('/')) {
+        const dir = pattern.slice(0, -1);
+        return (p: string) => {
+          const n = (p || '').replace(/^\//, '');
+          return n === dir || n.startsWith(dir + '/');
+        };
+      }
+
+      // Simple filename (e.g. .DS_Store)
+      if (!pattern.includes('*') && !pattern.includes('?')) {
+        return (p: string) => {
+          const n = (p || '').replace(/^\//, '');
+          const base = n.split('/').pop() || n;
+          return base === pattern;
+        };
+      }
+
+      // Basic glob on basename (e.g. *.pyc, *.log)
+      const escapeRegex = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const regexStr = '^' + pattern
+        .split(/([*?])/)
+        .map(tok => tok === '*' ? '.*' : tok === '?' ? '.' : escapeRegex(tok))
+        .join('') + '$';
+      const regex = new RegExp(regexStr);
+      return (p: string) => {
+        const n = (p || '').replace(/^\//, '');
+        const base = n.split('/').pop() || n;
+        return regex.test(base);
+      };
+    };
+
+    const predicates = patterns.map(toPredicate);
+    return (p: string) => predicates.some(fn => fn(p));
+  }, [gitignoreText, agentignoreText]);
+
+  // Filtered views for tree and sending
+  const projectForTree = React.useMemo(() => {
+    const out: Record<string, string> = {};
+    for (const [p, c] of Object.entries(project)) {
+      if (!isPathIgnored(p) || p === activeFile) out[p] = c;
+    }
+    return out;
+  }, [project, isPathIgnored, activeFile]);
+  const proposalsForTree = React.useMemo(() => {
+    const out: Record<string, string> = {};
+    for (const [p, c] of Object.entries(proposals)) {
+      if (!isPathIgnored(p) || p === activeFile) out[p] = c;
+    }
+    return out;
+  }, [proposals, isPathIgnored, activeFile]);
+
+  const projectForSend = React.useMemo(() => {
+    const out: Record<string, string> = {};
+    for (const [p, c] of Object.entries(project)) {
+      // Always keep ignore files themselves available
+      if (!isPathIgnored(p) || p === '.gitignore' || p === '.agentignore') out[p] = c;
+    }
+    return out;
+  }, [project, isPathIgnored]);
+  const proposalsForSend = React.useMemo(() => {
+    const out: Record<string, string> = {};
+    for (const [p, c] of Object.entries(proposals)) {
+      if (!isPathIgnored(p)) out[p] = c;
+    }
+    return out;
+  }, [proposals, isPathIgnored]);
+
   // Map SSE events to UI actions and create the stream controller
   const handleAgentEvent = useAgentEvents({
     setLoading,
     setCurrentTaskId,
     setCancelling,
-    upsertProposal,
+    upsertProposal: (filePath: string, newContent: string) => {
+      if (!isPathIgnored(filePath)) upsertProposal(filePath, newContent);
+    },
     onCreateFolder: (folderPath: string) => {
       setProject(prev => ({ ...prev }));
       setFolders(prev => Array.from(new Set([...(prev || []), folderPath.replace(/^\//,'')] )));
@@ -411,6 +517,15 @@ function App() {
         setActiveFile(remaining[0] || '');
       }
     },
+    onUpsertFile: (filePath: string, content: string) => {
+      if (isPathIgnored(filePath)) return;
+      setProject(prev => (prev[filePath] !== undefined ? prev : { ...prev, [filePath]: (content ?? '') }));
+    },
+    onSetPreviewUrl: (url: string | null) => {
+      // Reuse the play.previewUrl slot to display the embedded preview panel
+      // (The hook exposes setPreviewUrl for this purpose)
+      (play as unknown as { setPreviewUrl?: (u: string | null) => void }).setPreviewUrl?.(url);
+    },
   });
   const stream = useAgentStream({ onMessage: handleAgentEvent });
 
@@ -420,11 +535,8 @@ function App() {
     input,
     currentTaskId,
     cancelling,
-    project: (() => {
-      // If proposedChange targets the active file, include it in the sent project state so agent sees the un-applied proposal? We keep project as-is and only surface proposals in UI.
-      return project;
-    })(),
-    proposals,
+    project: projectForSend,
+    proposals: proposalsForSend,
     setInput,
     setLoading,
     setCurrentTaskId,
@@ -451,8 +563,15 @@ function App() {
     const merged: Record<string, string> = { ...project };
     // If a proposal exists for active file and is visible, prefer current editor content via code state
     merged[activeFile] = code;
-    play.start({ userId: USER_ID, project: merged, entryPath: activeFile });
-  }, [project, activeFile, code, play]);
+    const filtered: Record<string, string> = {};
+    for (const [p, c] of Object.entries(merged)) {
+      // Always keep entry file and ignore control files
+      if (p === activeFile || p === '.gitignore' || p === '.agentignore' || !isPathIgnored(p)) {
+        filtered[p] = c;
+      }
+    }
+    play.start({ userId: USER_ID, project: filtered, entryPath: activeFile });
+  }, [project, activeFile, code, play, isPathIgnored]);
 
   const handleStop = React.useCallback(() => {
     play.stop();
@@ -478,7 +597,8 @@ function App() {
     if (play.status !== 'done' && play.status !== 'error') return;
 
     const { runId, actionId, resumeToken } = pendingExecResume;
-    const output = play.logs || '';
+    let output = play.logs || '';
+    if (output.length > 100000) output = output.slice(-100000);
 
     // Resume agent via SSE with sandbox output
     stream.disconnect(runId);
@@ -528,7 +648,8 @@ function App() {
     if (resumeToken) {
       // Close current SSE stream to avoid duplicate events during resume
       stream.disconnect(currentTaskId);
-      stream.resume(currentTaskId, resumeToken, rejectMsg);
+      const small = rejectMsg.length > 20000 ? rejectMsg.slice(-20000) : rejectMsg;
+      stream.resume(currentTaskId, resumeToken, small);
     }
 
     // Update action locally
@@ -574,7 +695,7 @@ function App() {
     <ThreePane
       left={(
         <FileTree
-          project={project}
+          project={projectForTree}
           activeFile={activeFile}
           onSelect={setActiveFile}
           onCreateFile={(name) => {
@@ -679,7 +800,7 @@ function App() {
               setActiveFile(`${targetBase}${suffix}`.replace(/^\//,''));
             }
           }}
-          proposed={proposals}
+          proposed={proposalsForTree}
           folders={folders}
           onRenameFolder={(oldPath, newPath) => {
             const normalizedOld = oldPath.replace(/\/$/,'');
@@ -765,6 +886,7 @@ function App() {
           onOpenPreview={play.openPreview}
           terminalLogs={play.logs}
           onClearLogs={play.clear}
+          isIgnored={isPathIgnored}
         // When editor requests a code fix open modal
         onRequestCodeFix={openCodeFix}
         />
