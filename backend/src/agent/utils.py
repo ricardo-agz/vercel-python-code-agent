@@ -97,6 +97,7 @@ DEFAULT_AGENT_IGNORE_PATTERNS: list[str] = [
     "dist/",
     "build/",
     ".venv/",
+    "venv/",
     "env/",
     "*.log",
     ".bundle/",
@@ -140,17 +141,47 @@ def make_ignore_predicate(project: dict[str, str]) -> "callable[[str], bool]":
         *_parse_ignore_lines(agentignore),
     ]
 
+    # Also include nested ignore files by prefixing their folder path onto rules
+    try:
+        for path, text in project.items():
+            if not path or "/.gitignore" not in path and "/.agentignore" not in path:
+                continue
+            # folder prefix (strip the ".gitignore" or ".agentignore" filename)
+            base = path.rsplit("/", 1)[0].lstrip("/")
+            if not base:
+                continue
+            for rule in _parse_ignore_lines(text or ""):
+                r = rule.strip()
+                if not r:
+                    continue
+                if r.endswith("/"):
+                    # directory rule stays a directory rule under base
+                    patterns.append(f"{base}/{r}")
+                else:
+                    # file/glob rule under base; keep relative to base
+                    patterns.append(f"{base}/{r}")
+    except Exception:
+        # best-effort; ignore errors loading nested ignore files
+        pass
+
     def to_predicate(pat: str):
         pattern = pat.lstrip("/").strip()
         if not pattern:
             return lambda _p: False
 
-        # Directory match (e.g. foo/)
+        # Directory match (e.g. foo/). If pattern includes a slash, treat as anchored path prefix.
         if pattern.endswith("/"):
-            directory = pattern[:-1]
+            directory = pattern[:-1].lstrip("/")
             def _dir(path: str) -> bool:
                 n = (path or "").lstrip("/")
-                return n == directory or n.startswith(directory + "/")
+                if not directory:
+                    return False
+                if "/" in directory:
+                    # anchored subpath: match exact or prefix (e.g., "frontend/node_modules/")
+                    return n == directory or n.startswith(directory + "/")
+                # segment match anywhere (e.g., any "node_modules" segment in the path)
+                parts = n.split("/") if n else []
+                return directory in parts
             return _dir
 
         # Exact basename match

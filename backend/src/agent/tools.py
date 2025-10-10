@@ -6,6 +6,7 @@ from urllib.parse import urlparse
 from vercel.sandbox import Sandbox
 from agents import function_tool, RunContextWrapper
 from src.agent.context import IDEContext
+from src.agent.utils import make_ignore_predicate
 
 
 def _perform_edit_code(file_content: str, args: dict[str, Any]) -> dict[str, Any]:
@@ -468,7 +469,7 @@ async def _snapshot_files_into_context(ctx: RunContextWrapper[IDEContext], sandb
                 "-lc",
                 (
                     f"cd {sandbox.sandbox.cwd} && "
-                    "find . \\\"( -path './.git/*' -o -path './node_modules/*' -o -path './vendor/*' -o -path './.bundle/*' -o -path './.cache/*' -o -path './tmp/*' -o -path './log/*' -o -path './logs/*' \\\") -prune -o -type f -printf '%P\t%T@\t%s\n' 2>/dev/null | sort"
+                    "find . \\( -path './.git/*' -o -path './node_modules/*' -o -path './vendor/*' -o -path './.bundle/*' -o -path './.cache/*' -o -path './tmp/*' -o -path './log/*' -o -path './logs/*' \\) -prune -o -type f -printf '%P\t%T@\t%s\n' 2>/dev/null | sort"
                 ),
             ],
         )
@@ -482,8 +483,16 @@ async def _snapshot_files_into_context(ctx: RunContextWrapper[IDEContext], sandb
                 continue
             files.append(rel)
             current[rel] = f"{mtime} {size}"
-        ctx.context.sandbox_files = files
-        ctx.context.sandbox_file_meta = current
+        # Filter out ignored paths (e.g., __pycache__/, node_modules/, etc.)
+        try:
+            is_ignored = make_ignore_predicate(ctx.context.project or {})
+            filtered_files = [p for p in files if not is_ignored(p)]
+            filtered_current: dict[str, str] = {p: meta for p, meta in current.items() if not is_ignored(p)}
+        except Exception:
+            filtered_files = files
+            filtered_current = current
+        ctx.context.sandbox_files = filtered_files
+        ctx.context.sandbox_file_meta = filtered_current
     except Exception:
         # Non-fatal; continue without baseline
         pass
@@ -813,7 +822,7 @@ async def sandbox_run(
     command: str,
     cwd: Optional[str] = None,
     env: Optional[List[str]] = None,
-    detached: bool = True,
+    detached: bool = False,
     ready_patterns: Optional[List[str]] = None,
     port: Optional[int] = None,
     wait_timeout_ms: Optional[int] = 30_000,
@@ -1308,7 +1317,7 @@ async def sandbox_run(
                     "-lc",
                     (
                         f"cd {sandbox.sandbox.cwd} && "
-                        "find . \\\"( -path './.git/*' -o -path './node_modules/*' -o -path './vendor/*' -o -path './.bundle/*' -o -path './.cache/*' -o -path './tmp/*' -o -path './log/*' -o -path './logs/*' \\\") -prune -o -type f -printf '%P\t%T@\t%s\n' 2>/dev/null | sort"
+                        "find . \\( -path './.git/*' -o -path './node_modules/*' -o -path './vendor/*' -o -path './.bundle/*' -o -path './.cache/*' -o -path './tmp/*' -o -path './log/*' -o -path './logs/*' \\) -prune -o -type f -printf '%P\t%T@\t%s\n' 2>/dev/null | sort"
                     ),
                 ],
             )
@@ -1335,6 +1344,17 @@ async def sandbox_run(
             for p in sorted(cur_keys & prev_keys):
                 if prev.get(p) != current.get(p):
                     updated.append(p)
+            # Filter out ignored paths consistently
+            try:
+                is_ignored = make_ignore_predicate(ctx.context.project or {})
+                files = [p for p in files if not is_ignored(p)]
+                current = {p: meta for p, meta in current.items() if not is_ignored(p)}
+                created = [p for p in created if not is_ignored(p)]
+                updated = [p for p in updated if not is_ignored(p)]
+                deleted = [p for p in deleted if not is_ignored(p)]
+            except Exception:
+                pass
+
             ctx.context.sandbox_files = files
             ctx.context.sandbox_file_meta = current
             # Optionally sample contents of small created/updated files for frontend resync

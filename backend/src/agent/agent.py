@@ -34,7 +34,7 @@ from src.agent.utils import build_project_input, make_ignore_predicate
 logger = logging.getLogger("ide_agent.agent")
 
 
-ALLOWED_TURNS = 30
+ALLOWED_TURNS = 50
 SLEEP_INTERVAL_SECONDS = 0.05
 
 
