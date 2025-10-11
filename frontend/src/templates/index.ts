@@ -8,6 +8,10 @@ export type ProjectTemplate = {
   suggestions?: string[];
 };
 
+// Stacks: allow composing a frontend and backend into one project
+export const FRONTEND_TEMPLATE_IDS = ['next_stack', 'react_stack'] as const;
+export const BACKEND_TEMPLATE_IDS = ['express', 'fastapi', 'flask', 'hono'] as const;
+
 // Metadata for each template
 const TEMPLATE_METADATA = [
   {
@@ -36,6 +40,45 @@ const TEMPLATE_METADATA = [
     ],
   },
   {
+    id: 'express',
+    label: 'Express',
+    description: 'Node.js API with Express',
+    directory: 'express',
+    defaultActiveFile: 'server.js',
+    suggestions: [
+      'Run this code.',
+      'Add /todos API with in-memory CRUD (GET, POST, DELETE) and run',
+      'Implement /math/fibonacci?n=20 that returns the sequence as JSON and run',
+      'Add request logging middleware plus /health and /time endpoints and run',
+    ],
+  },
+  {
+    id: 'flask',
+    label: 'Flask',
+    description: 'Python API with Flask',
+    directory: 'flask',
+    defaultActiveFile: 'app.py',
+    suggestions: [
+      'Run this code.',
+      'Add /todos API with in-memory CRUD (GET, POST, DELETE) and run',
+      'Implement /math/fibonacci?n=20 that returns the sequence as JSON and run',
+      'Add request logging middleware plus /health and /time endpoints and run',
+    ],
+  },
+  {
+    id: 'hono',
+    label: 'Hono',
+    description: 'TypeScript/JavaScript API with Hono',
+    directory: 'hono',
+    defaultActiveFile: 'server.ts',
+    suggestions: [
+      'Run this code.',
+      'Add /todos API with in-memory CRUD (GET, POST, DELETE) and run',
+      'Implement /math/fibonacci?n=20 that returns the sequence as JSON and run',
+      'Add request logging middleware plus /health and /time endpoints and run',
+    ],
+  },
+  {
     id: 'next',
     label: 'Next.js',
     description: 'React framework with server-side rendering',
@@ -47,6 +90,32 @@ const TEMPLATE_METADATA = [
       'Implement /api/math/fibonacci?n=20 returning JSON and render it on the page and run',
       'Add request logging plus /api/health and /api/time routes and run',
     ],
+  },
+  {
+    id: 'next_stack',
+    label: 'Next.js',
+    description: 'Next.js frontend built to pair with a backend',
+    directory: 'next_stack',
+    defaultActiveFile: 'src/app/page.tsx',
+  },
+  {
+    id: 'react',
+    label: 'React (Vite)',
+    description: 'React SPA powered by Vite + TypeScript',
+    directory: 'react',
+    defaultActiveFile: 'src/App.tsx',
+    suggestions: [
+      'Run this code.',
+      'Add a simple todo list component with local state and run',
+      'Fetch from a /api/health endpoint and render status and run',
+    ],
+  },
+  {
+    id: 'react_stack',
+    label: 'React',
+    description: 'React (Vite) frontend built to pair with a backend',
+    directory: 'react_stack',
+    defaultActiveFile: 'src/App.tsx',
   },
   {
     id: 'go',
@@ -145,5 +214,61 @@ export const TEMPLATES = buildTemplates();
 // Get template by ID
 export function getTemplateById(id: string): ProjectTemplate | undefined {
   return TEMPLATES.find(t => t.id === id);
+}
+
+// -----------------------------
+// Stack composition helpers
+// -----------------------------
+
+export function isStackId(id: string): boolean {
+  return typeof id === 'string' && id.startsWith('stack:');
+}
+
+function parseStackId(id: string): { frontendId: string; backendId: string } | null {
+  if (!isStackId(id)) return null;
+  const rest = id.slice('stack:'.length);
+  const [frontendId, backendId] = rest.split('+');
+  if (!frontendId || !backendId) return null;
+  return { frontendId, backendId };
+}
+
+export function composeStack(frontendId: string, backendId: string): ProjectTemplate | undefined {
+  const frontend = getTemplateById(frontendId);
+  const backend = getTemplateById(backendId);
+  if (!frontend || !backend) return undefined;
+
+  const files: Record<string, string> = {};
+  for (const [p, c] of Object.entries(frontend.files)) {
+    files[`frontend/${p}`] = c as string;
+  }
+  for (const [p, c] of Object.entries(backend.files)) {
+    files[`backend/${p}`] = c as string;
+  }
+
+  // No UI injection here; stack-specific frontends handle connectivity checks
+
+  const backendDefault = `backend/${backend.defaultActiveFile}`;
+  const frontendDefault = `frontend/${frontend.defaultActiveFile}`;
+  const defaultActiveFile = (backendDefault in files)
+    ? backendDefault
+    : ((frontendDefault in files) ? frontendDefault : (Object.keys(files)[0] || 'README.md'));
+
+  // For stacks, keep suggestions concise: prefer backend-only prompts
+  const suggestions = backend.suggestions ? [...backend.suggestions] : (frontend.suggestions ? [...frontend.suggestions] : undefined);
+
+  return {
+    id: `stack:${frontend.id}+${backend.id}`,
+    label: `${frontend.label} + ${backend.label}`,
+    description: 'Custom stack (composed frontend and backend)',
+    files,
+    defaultActiveFile,
+    suggestions,
+  };
+}
+
+export function getStackById(id: string): ProjectTemplate | undefined {
+  const parsed = parseStackId(id);
+  if (!parsed) return undefined;
+  return composeStack(parsed.frontendId, parsed.backendId);
 }
 

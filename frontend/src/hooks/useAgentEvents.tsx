@@ -5,11 +5,9 @@ import type { Action } from '../types/run';
 
 interface UseAgentEventsProps {
   setLoading: (loading: boolean) => void;
-  setCurrentTaskId: (taskId: string | null) => void;
   setCancelling: (cancelling: boolean) => void;
   // Allow updating UI state for background runs by project id
   setLoadingForProject?: (projectId: string, loading: boolean) => void;
-  setCurrentTaskIdForProject?: (projectId: string, taskId: string | null) => void;
   upsertProposal: (filePath: string, newContent: string) => void;
   onCreateFolder?: (folderPath: string) => void;
   onDeleteFolder?: (folderPath: string) => void;
@@ -24,10 +22,8 @@ interface UseAgentEventsProps {
 
 export const useAgentEvents = ({
   setLoading,
-  setCurrentTaskId,
   setCancelling,
   setLoadingForProject,
-  setCurrentTaskIdForProject,
   upsertProposal,
   onCreateFolder,
   onDeleteFolder,
@@ -298,13 +294,11 @@ export const useAgentEvents = ({
           // Ensure background thread/project UI clears loading
           if (run.projectId) {
             setLoadingForProject?.(run.projectId, false);
-            setCurrentTaskIdForProject?.(run.projectId, null);
           }
         }
         // Also clear active UI if this run is currently active
         if (!isActiveRun || isActiveRun(event.task_id)) {
           setLoading(false);
-          setCurrentTaskId(null);
         }
         break;
       }
@@ -330,14 +324,12 @@ export const useAgentEvents = ({
             }
             if (run.projectId) {
               setLoadingForProject?.(run.projectId, false);
-              setCurrentTaskIdForProject?.(run.projectId, null);
             }
           }
         }
         if (!isActiveRun || isActiveRun(event.task_id)) {
           setLoading(false);
           setCancelling(false);
-          setCurrentTaskId(null);
         }
         break;
       }
@@ -364,14 +356,12 @@ export const useAgentEvents = ({
             }
             if (run.projectId) {
               setLoadingForProject?.(run.projectId, false);
-              setCurrentTaskIdForProject?.(run.projectId, null);
             }
           }
         }
         if (!isActiveRun || isActiveRun(event.task_id)) {
           setLoading(false);
           setCancelling(false);
-          setCurrentTaskId(null);
         }
         break;
       }
@@ -382,10 +372,8 @@ export const useAgentEvents = ({
     }
   }, [
     setLoading,
-    setCurrentTaskId,
     setCancelling,
     setLoadingForProject,
-    setCurrentTaskIdForProject,
     upsertProposal,
     onCreateFolder,
     onDeleteFolder,

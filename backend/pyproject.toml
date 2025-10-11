@@ -15,6 +15,7 @@ dependencies = [
   "openai-agents[litellm]",
   "PyJWT==2.9.0",
   "vercel-sandbox==0.0.1",
+  "vercel-sdk==0.0.5",
   "httpx",
   "httpx-sse",
 ]

@@ -21,7 +21,7 @@ import AccountMenu from './components/AccountMenu';
 import { CodeFixModal } from './components/CodeFixModal';
 import ProjectTabs, { type ProjectTab } from './components/ProjectTabs';
 import NewProjectModal from './components/NewProjectModal';
-import { getTemplateById, TEMPLATES } from './templates/index';
+import { getTemplateById, getStackById, TEMPLATES } from './templates/index';
 import { loadPersistedState, savePersistedState, type PersistedState, type PersistedProjectState } from './lib/persistence';
 import { getProjectChatThreads, setCurrentChatThread, startNewChatThread, upsertCurrentChatThread, mergeThreadIntoRuns, upsertThreadById, deleteChatThread, type PersistedChatThread, MAX_THREADS_PER_PROJECT } from './lib/persistence';
 import { History as HistoryIcon, Plus, X } from 'lucide-react';
@@ -188,7 +188,6 @@ function App() {
     expandedFolders: string[];
     input: string;
     loading: boolean;
-    currentTaskId: string | null;
     cancelling: boolean;
     model: string;
     codeFix: { fileName: string; startLine: number; endLine: number; selectedCode: string } | null;
@@ -229,7 +228,6 @@ function App() {
           expandedFolders: Array.isArray(s?.expandedFolders) ? (s?.expandedFolders as string[]) : [],
           input: '',
           loading: false,
-          currentTaskId: null,
           cancelling: false,
           model: s?.model || 'anthropic/claude-sonnet-4.5',
           codeFix: null,
@@ -248,7 +246,6 @@ function App() {
             expandedFolders: [],
             input: '',
             loading: false,
-            currentTaskId: null,
             cancelling: false,
             model: 'anthropic/claude-sonnet-4.5',
             codeFix: null,
@@ -268,7 +265,6 @@ function App() {
         expandedFolders: [],
         input: '',
         loading: false,
-        currentTaskId: null,
         cancelling: false,
         model: 'anthropic/claude-sonnet-4.5',
         codeFix: null,
@@ -312,7 +308,6 @@ function App() {
     expandedFolders: [],
     input: '',
     loading: false,
-    currentTaskId: null,
     cancelling: false,
     model: 'anthropic/claude-sonnet-4.5',
     codeFix: null,
@@ -325,9 +320,6 @@ function App() {
   const folders = activeState.folders;
   const expandedFolders = activeState.expandedFolders;
   const input = activeState.input;
-  // legacy mutable loading flag (kept for backward compatibility; UI derives thinking below)
-  // const loading = activeState.loading; // may be removed after full migration
-  const currentTaskId = activeState.currentTaskId; // planned removal; used only by useChat
   const cancelling = activeState.cancelling;
   const model = activeState.model;
   const codeFix = activeState.codeFix;
@@ -361,9 +353,6 @@ function App() {
   const setLoading = React.useCallback((next: boolean) => {
     setProjectStates(prev => ({ ...prev, [activeProjectId]: { ...prev[activeProjectId], loading: next } }));
   }, [activeProjectId]);
-  const setCurrentTaskId = React.useCallback((next: string | null) => {
-    setProjectStates(prev => ({ ...prev, [activeProjectId]: { ...prev[activeProjectId], currentTaskId: next } }));
-  }, [activeProjectId]);
   const setCancelling = React.useCallback((next: boolean) => {
     setProjectStates(prev => ({ ...prev, [activeProjectId]: { ...prev[activeProjectId], cancelling: next } }));
   }, [activeProjectId]);
@@ -390,7 +379,7 @@ function App() {
     });
   }, [setProposals]);
   
-  // input/loading/currentTaskId/cancelling/model now scoped per project
+  // input/loading/cancelling/model now scoped per project
   // Sidebar resizing
   // Track if we're currently processing a code-execution decision
   const [executingCode, setExecutingCode] = useState(false);
@@ -641,13 +630,9 @@ function App() {
   const isActiveRun = React.useCallback((taskId: string) => taskId === latestRunId, [latestRunId]);
   const handleAgentEvent = useAgentEvents({
     setLoading,
-    setCurrentTaskId,
     setCancelling,
     setLoadingForProject: (projectId: string, next: boolean) => {
       setProjectStates(prev => ({ ...prev, [projectId]: { ...(prev[projectId] || activeState), loading: next } }));
-    },
-    setCurrentTaskIdForProject: (projectId: string, next: string | null) => {
-      setProjectStates(prev => ({ ...prev, [projectId]: { ...(prev[projectId] || activeState), currentTaskId: next } }));
     },
     upsertProposal: (filePath: string, newContent: string) => {
       if (!isPathIgnored(filePath)) upsertProposal(filePath, newContent);
@@ -776,18 +761,14 @@ function App() {
   const isThinking = Boolean(
     latestRunId && !latestRunHasFinalAnswer && (
       latestRunConnected ||
-      latestRunStatus === 'streaming' ||
       latestRunStatus === 'waiting_exec'
     )
   );
-
-  // No legacy compatibility syncing; UI derives thinking state from runs
 
   // Initialize chat functionality
   const { sendPrompt, cancelCurrentTask } = useChat({
     userId: USER_ID,
     input,
-    currentTaskId,
     cancelling,
     project: projectForSend,
     proposals: proposalsForSend,
@@ -795,7 +776,6 @@ function App() {
     threadId: activeThreadId || `${activeProjectId}_default`,
     setInput,
     setLoading,
-    setCurrentTaskId,
     setCancelling,
     stream,
     model,
@@ -852,7 +832,7 @@ function App() {
   const handleCancelTask = () => {
     // Cancel only if the latest run is the active thinking one
     if (latestRunId && isThinking && !cancelling) {
-      cancelCurrentTask();
+      cancelCurrentTask(latestRunId);
     }
   };
 
@@ -863,9 +843,8 @@ function App() {
     // Reset UI state for this project to focus on new chat
     setInput('');
     setLoading(false);
-    setCurrentTaskId(null);
     setCancelling(false);
-  }, [activeProjectId, setInput, setLoading, setCurrentTaskId, setCancelling, setActiveThreadId]);
+  }, [activeProjectId, setInput, setLoading, setCancelling, setActiveThreadId]);
 
   // When sandbox run completes after an approved exec request, resume the agent with logs
   React.useEffect(() => {
@@ -946,7 +925,7 @@ function App() {
 
     setExecutingCode(false);
     setExecutionAction(null);
-    // Keep currentTaskId until run completes to avoid re-opening prompt prematurely
+    // Keep run state until completion to avoid re-opening prompt prematurely
   };
 
   const handleAcceptExecution = async () => {
@@ -1014,7 +993,6 @@ function App() {
                     expandedFolders: Array.isArray(srcState.expandedFolders) ? [...srcState.expandedFolders] : [],
                     input: '',
                     loading: false,
-                    currentTaskId: null,
                     cancelling: false,
                     model: srcState.model,
                     codeFix: null,
@@ -1409,7 +1387,8 @@ function App() {
               cancelling={cancelling}
               suggestions={(() => {
                 if (timelineActions.length > 0) return undefined;
-                const tmpl = TEMPLATES.find(t => t.id === (projectStates[activeProjectId]?.templateId || defaultTemplateId));
+                const tid = (projectStates[activeProjectId]?.templateId || defaultTemplateId);
+                const tmpl = getTemplateById(tid) || getStackById(tid);
                 const list = (tmpl?.suggestions && tmpl.suggestions.length > 0)
                   ? tmpl!.suggestions
                   : [
@@ -1439,7 +1418,7 @@ function App() {
       onCreate={(name, templateId) => {
         const id = `proj_${Date.now().toString(36)}_${Math.random().toString(36).slice(2,7)}`;
         setProjects(prev => [...prev, { id, name }]);
-        const t = getTemplateById(templateId) || defaultTemplate;
+        const t = getTemplateById(templateId) || getStackById(templateId) || defaultTemplate;
         setProjectStates(prev => ({
           ...prev,
           [id]: {
@@ -1450,7 +1429,6 @@ function App() {
             expandedFolders: [],
             input: '',
             loading: false,
-            currentTaskId: null,
             cancelling: false,
             model: 'anthropic/claude-sonnet-4.5',
             codeFix: null,

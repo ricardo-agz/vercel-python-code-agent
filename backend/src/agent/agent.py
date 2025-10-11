@@ -28,6 +28,7 @@ from src.sse import (
     tool_started_sse,
     tool_completed_sse,
 )
+from src.run_store import update_run_project
 from src.agent.utils import build_project_input, make_ignore_predicate
 
 
@@ -125,6 +126,16 @@ async def run_agent_flow(
     )
 
     context = IDEContext(project=filtered_project, base_payload=base_payload)
+    # Keep run store in sync with filtered project so resume tokens remain small
+    try:
+        import asyncio
+        coro = update_run_project(task_id, filtered_project)
+        if asyncio.get_event_loop().is_running():
+            asyncio.create_task(coro)
+        else:
+            asyncio.run(coro)
+    except Exception:
+        pass
 
     selected_model = payload.get("model")
     agent_instance = create_ide_agent(selected_model) if selected_model else ide_agent

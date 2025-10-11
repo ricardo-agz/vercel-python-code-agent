@@ -12,16 +12,18 @@
   "dependencies": {
     "@geist-ui/icons": "^1.0.2",
     "@monaco-editor/react": "^4.7.0",
-    "monaco-editor": "^0.52.0",
     "@tailwindcss/postcss": "^4.1.9",
     "@tailwindcss/vite": "^4.1.9",
     "autoprefixer": "^10.4.21",
-    "lucide-react": "^0.514.0",
     "jszip": "^3.10.1",
+    "lucide-react": "^0.514.0",
+    "monaco-editor": "^0.52.0",
     "postcss": "^8.5.5",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
     "react-icons": "^5.2.1",
+    "react-markdown": "^10.1.0",
+    "remark-gfm": "^4.0.1",
     "tailwindcss": "^4.1.9"
   },
   "devDependencies": {

@@ -1,5 +1,5 @@
 import React from 'react';
-import { TEMPLATES } from '../templates/index';
+import { TEMPLATES, FRONTEND_TEMPLATE_IDS, BACKEND_TEMPLATE_IDS } from '../templates/index';
 
 type NewProjectModalProps = {
   visible: boolean;
@@ -11,21 +11,36 @@ type NewProjectModalProps = {
 
 export const NewProjectModal: React.FC<NewProjectModalProps> = ({ visible, defaultName, existingNames, onClose, onCreate }) => {
   const [name, setName] = React.useState<string>('');
+  const [mode, setMode] = React.useState<'template' | 'stack'>('template');
   const [templateId, setTemplateId] = React.useState<string>('fastapi');
+  const [frontendId, setFrontendId] = React.useState<string>('next');
+  const [backendId, setBackendId] = React.useState<string>('fastapi');
   const inputRef = React.useRef<HTMLInputElement>(null);
 
   React.useEffect(() => {
     if (visible) {
       // Start with an empty value so the input shows only the placeholder suggestion
       setName('');
+      setMode('template');
       setTemplateId('fastapi');
+      setFrontendId('next');
+      setBackendId('fastapi');
       requestAnimationFrame(() => inputRef.current?.focus());
     }
   }, [visible, defaultName]);
 
   const placeholderName = React.useMemo(() => {
-    const tmpl = TEMPLATES.find(t => t.id === templateId);
-    const base = (tmpl?.label || defaultName || 'Project').trim();
+    const baseLabel = (() => {
+      if (mode === 'template') {
+        const tmpl = TEMPLATES.find(t => t.id === templateId);
+        return tmpl?.label;
+      }
+      const fe = TEMPLATES.find(t => t.id === frontendId);
+      const be = TEMPLATES.find(t => t.id === backendId);
+      if (fe && be) return `${fe.label} + ${be.label}`;
+      return undefined;
+    })();
+    const base = (baseLabel || defaultName || 'Project').trim();
     const existing = new Set((existingNames || []).map(s => (s || '').trim().toLowerCase()))
     if (!existing.has(base.toLowerCase())) return base;
     // Find the next available suffix: base 2, base 3, ...
@@ -36,7 +51,7 @@ export const NewProjectModal: React.FC<NewProjectModalProps> = ({ visible, defau
     }
     // Fallback if all else fails
     return `${base} ${Date.now()}`;
-  }, [templateId, existingNames, defaultName]);
+  }, [mode, templateId, frontendId, backendId, existingNames, defaultName]);
 
   if (!visible) return null;
 
@@ -44,7 +59,8 @@ export const NewProjectModal: React.FC<NewProjectModalProps> = ({ visible, defau
     const trimmed = (name || '').trim();
     const finalName = trimmed || placeholderName;
     if (!finalName) return;
-    onCreate(finalName, templateId);
+    const id = (mode === 'template') ? templateId : `stack:${frontendId}+${backendId}`;
+    onCreate(finalName, id);
   };
 
   return (
@@ -74,26 +90,88 @@ export const NewProjectModal: React.FC<NewProjectModalProps> = ({ visible, defau
             style={{ background: 'var(--vscode-contrast)', border: '1px solid var(--vscode-panel-border)', color: 'var(--vscode-text)' }}
           />
           <div className="mt-2">
-            <label className="text-xs" htmlFor="new-project-template" style={{ color: 'var(--vscode-muted)' }}>Template</label>
-            <div className="mt-1 grid grid-cols-2 gap-2">
-              {TEMPLATES.map(t => (
-                <button
-                  key={t.id}
-                  onClick={() => setTemplateId(t.id)}
-                  className={`text-left p-2 rounded-sm border cursor-pointer ${templateId === t.id ? 'ring-1' : ''}`}
-                  style={{
-                    background: templateId === t.id ? 'var(--vscode-surface)' : 'var(--vscode-contrast)',
-                    borderColor: 'var(--vscode-panel-border)',
-                    color: 'var(--vscode-text)'
-                  }}
-                >
-                  <div className="text-sm font-medium">{t.label}</div>
-                  {t.description ? (
-                    <div className="text-xs" style={{ color: 'var(--vscode-muted)' }}>{t.description}</div>
-                  ) : null}
-                </button>
-              ))}
+            <div className="flex gap-2 mb-2">
+              <button
+                className={`px-2 py-1 rounded-sm border cursor-pointer ${mode === 'template' ? 'ring-1' : ''}`}
+                style={{ background: mode === 'template' ? 'var(--vscode-surface)' : 'var(--vscode-contrast)', borderColor: 'var(--vscode-panel-border)', color: 'var(--vscode-text)' }}
+                onClick={() => setMode('template')}
+              >Choose a Template</button>
+              <button
+                className={`px-2 py-1 rounded-sm border cursor-pointer ${mode === 'stack' ? 'ring-1' : ''}`}
+                style={{ background: mode === 'stack' ? 'var(--vscode-surface)' : 'var(--vscode-contrast)', borderColor: 'var(--vscode-panel-border)', color: 'var(--vscode-text)' }}
+                onClick={() => setMode('stack')}
+              >Choose a Stack</button>
             </div>
+
+            {mode === 'template' ? (
+              <>
+                <label className="text-xs" htmlFor="new-project-template" style={{ color: 'var(--vscode-muted)' }}>Choose a template</label>
+                <div className="mt-1 grid grid-cols-2 gap-2">
+                  {TEMPLATES.map(t => (
+                    <button
+                      key={t.id}
+                      onClick={() => setTemplateId(t.id)}
+                      className={`text-left p-2 rounded-sm border cursor-pointer ${templateId === t.id ? 'ring-1' : ''}`}
+                      style={{
+                        background: templateId === t.id ? 'var(--vscode-surface)' : 'var(--vscode-contrast)',
+                        borderColor: 'var(--vscode-panel-border)',
+                        color: 'var(--vscode-text)'
+                      }}
+                    >
+                      <div className="text-sm font-medium">{t.label}</div>
+                      {t.description ? (
+                        <div className="text-xs" style={{ color: 'var(--vscode-muted)' }}>{t.description}</div>
+                      ) : null}
+                    </button>
+                  ))}
+                </div>
+              </>
+            ) : (
+              <>
+                <label className="text-xs" style={{ color: 'var(--vscode-muted)' }}>Choose a frontend</label>
+                <div className="mt-1 grid grid-cols-2 gap-2">
+                  {TEMPLATES.filter(t => (FRONTEND_TEMPLATE_IDS as readonly string[]).includes(t.id)).map(t => (
+                    <button
+                      key={t.id}
+                      onClick={() => setFrontendId(t.id)}
+                      className={`text-left p-2 rounded-sm border cursor-pointer ${frontendId === t.id ? 'ring-1' : ''}`}
+                      style={{
+                        background: frontendId === t.id ? 'var(--vscode-surface)' : 'var(--vscode-contrast)',
+                        borderColor: 'var(--vscode-panel-border)',
+                        color: 'var(--vscode-text)'
+                      }}
+                    >
+                      <div className="text-sm font-medium">{t.label}</div>
+                      {t.description ? (
+                        <div className="text-xs" style={{ color: 'var(--vscode-muted)' }}>{t.description}</div>
+                      ) : null}
+                    </button>
+                  ))}
+                </div>
+                <div className="mt-3">
+                  <label className="text-xs" style={{ color: 'var(--vscode-muted)' }}>Choose a backend</label>
+                  <div className="mt-1 grid grid-cols-2 gap-2">
+                    {TEMPLATES.filter(t => (BACKEND_TEMPLATE_IDS as readonly string[]).includes(t.id)).map(t => (
+                      <button
+                        key={t.id}
+                        onClick={() => setBackendId(t.id)}
+                        className={`text-left p-2 rounded-sm border cursor-pointer ${backendId === t.id ? 'ring-1' : ''}`}
+                        style={{
+                          background: backendId === t.id ? 'var(--vscode-surface)' : 'var(--vscode-contrast)',
+                          borderColor: 'var(--vscode-panel-border)',
+                          color: 'var(--vscode-text)'
+                        }}
+                      >
+                        <div className="text-sm font-medium">{t.label}</div>
+                        {t.description ? (
+                          <div className="text-xs" style={{ color: 'var(--vscode-muted)' }}>{t.description}</div>
+                        ) : null}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </>
+            )}
           </div>
           <div className="flex items-center justify-end gap-2 pt-2" style={{ borderTop: '1px solid var(--vscode-panel-border)' }}>
             <button

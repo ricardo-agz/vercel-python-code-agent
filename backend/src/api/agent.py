@@ -5,7 +5,7 @@ import uuid
 from typing import Any, AsyncGenerator
 
 from pydantic import BaseModel
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 
 from src.agent.agent import run_agent_flow, resume_agent_flow
@@ -15,6 +15,7 @@ from src.sse import (
     sse_format,
     emit_event,
 )
+from src.run_store import set_run_payload, get_run_payload
 
 
 logger = logging.getLogger("ide_agent.api.runs")
@@ -51,21 +52,33 @@ async def create_run(request: RunRequest) -> dict[str, Any]:
     except Exception:
         pass
 
-    stream_token = make_stream_token(
+    # Store full payload server-side to keep stream tokens small
+    await set_run_payload(
+        task_id,
         {
             "user_id": request.user_id,
             "message_history": request.message_history,
             "query": request.query,
             "project": request.project,
             "model": request.model,
-        }
+        },
     )
+    # Issue a compact token carrying only the run id
+    stream_token = make_stream_token({"run_id": task_id})
     return {"task_id": task_id, "stream_token": stream_token}
 
 
 @router.get("/{run_id}/events")
 async def run_events(run_id: str, token: str):
-    payload = read_stream_token(token)
+    token_payload = read_stream_token(token)
+    if token_payload.get("run_id") != run_id:
+        raise HTTPException(status_code=400, detail="Token does not match run id")
+    payload = await get_run_payload(run_id)
+    if payload is None:
+        # Gracefully end the stream with a run_failed event
+        async def missing_generator() -> AsyncGenerator[str, None]:
+            yield sse_format(emit_event(run_id, "run_failed", error="Unknown or expired run id"))
+        return StreamingResponse(missing_generator(), headers=SSE_HEADERS)
 
     async def event_generator() -> AsyncGenerator[str, None]:
         try:
@@ -84,7 +97,14 @@ async def run_events(run_id: str, token: str):
 
 @router.get("/{run_id}/resume")
 async def resume_run(run_id: str, token: str, result: str):
-    base = read_stream_token(token)
+    token_payload = read_stream_token(token)
+    if token_payload.get("run_id") != run_id:
+        raise HTTPException(status_code=400, detail="Token does not match run id")
+    base = await get_run_payload(run_id)
+    if base is None:
+        async def missing_generator() -> AsyncGenerator[str, None]:
+            yield sse_format(emit_event(run_id, "run_failed", error="Unknown or expired run id"))
+        return StreamingResponse(missing_generator(), headers=SSE_HEADERS)
 
     async def event_generator() -> AsyncGenerator[str, None]:
         try:

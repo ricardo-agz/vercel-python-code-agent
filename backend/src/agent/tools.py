@@ -453,10 +453,10 @@ def _normalize_sandbox_name(ctx: RunContextWrapper[IDEContext], name: Optional[s
     return n
 
 
-async def _snapshot_files_into_context_named(
+async def _snapshot_files_into_context(
     ctx: RunContextWrapper[IDEContext], sandbox: Sandbox, name: str
 ) -> None:
-    """Snapshot filesystem and record both global (back-compat) and per-sandbox state."""
+    """Snapshot filesystem and record per-sandbox state."""
     try:
         cmd_ls = await sandbox.run_command(
             "bash",
@@ -486,9 +486,6 @@ async def _snapshot_files_into_context_named(
         except Exception:
             filtered_files = files
             filtered_current = current
-        # Back-compat single-sandbox fields
-        ctx.context.sandbox_files = filtered_files
-        ctx.context.sandbox_file_meta = filtered_current
         # Per-sandbox maps
         ctx.context.sandbox_files_map[name] = filtered_files
         ctx.context.sandbox_file_meta_map[name] = filtered_current
@@ -500,7 +497,7 @@ async def _snapshot_files_into_context_named(
 async def _get_sandbox_by_name(
     ctx: RunContextWrapper[IDEContext], name: str
 ) -> Sandbox:
-    """Get or create a sandbox by name; maintains back-compat fields as well."""
+    """Get or create a sandbox by name (multi-sandbox only)."""
     # If we have a mapping, fetch from cache or remote
     sid = (ctx.context.sandbox_name_to_id or {}).get(name)
     if sid and sid in _SANDBOX_CACHE:
@@ -509,19 +506,9 @@ async def _get_sandbox_by_name(
         fetched = await Sandbox.get(sandbox_id=sid)
         _SANDBOX_CACHE[sid] = fetched
         return fetched
-    # If no mapping but legacy single-sandbox exists and name is default, adopt it
-    if (not sid) and (name == "default") and ctx.context.sandbox_id:
-        sid = ctx.context.sandbox_id
-        if sid in _SANDBOX_CACHE:
-            ctx.context.sandbox_name_to_id[name] = sid
-            return _SANDBOX_CACHE[sid]
-        fetched = await Sandbox.get(sandbox_id=sid)
-        _SANDBOX_CACHE[sid] = fetched
-        ctx.context.sandbox_name_to_id[name] = sid
-        return fetched
-    # Create a new sandbox with stored preferences or legacy defaults
-    runtime = (ctx.context.sandbox_runtime_map or {}).get(name) or ctx.context.sandbox_runtime
-    ports = (ctx.context.sandbox_ports_map or {}).get(name) or ctx.context.sandbox_ports
+    # Create a new sandbox with stored preferences
+    runtime = (ctx.context.sandbox_runtime_map or {}).get(name)
+    ports = (ctx.context.sandbox_ports_map or {}).get(name)
     sandbox = await Sandbox.create(
         timeout=600_000,
         runtime=runtime,
@@ -529,14 +516,10 @@ async def _get_sandbox_by_name(
     )
     ctx.context.sandbox_name_to_id[name] = sandbox.sandbox_id
     ctx.context.active_sandbox = name
-    # Update legacy single-sandbox fields for back-compat
-    ctx.context.sandbox_id = sandbox.sandbox_id
-    ctx.context.sandbox_runtime = runtime
-    ctx.context.sandbox_ports = ports
     _SANDBOX_CACHE[sandbox.sandbox_id] = sandbox
     try:
         await _sync_project_files(ctx, sandbox)
-        await _snapshot_files_into_context_named(ctx, sandbox, name)
+        await _snapshot_files_into_context(ctx, sandbox, name)
     except Exception:
         pass
     return sandbox
@@ -561,69 +544,6 @@ async def _sync_project_files(ctx: RunContextWrapper[IDEContext], sandbox: Sandb
     return written
 
 
-async def _snapshot_files_into_context(ctx: RunContextWrapper[IDEContext], sandbox: Sandbox) -> None:
-    try:
-        cmd_ls = await sandbox.run_command(
-            "bash",
-            [
-                "-lc",
-                (
-                    f"cd {sandbox.sandbox.cwd} && "
-                    "find . \\( -path './.git/*' -o -path './node_modules/*' -o -path './vendor/*' -o -path './.bundle/*' -o -path './.cache/*' -o -path './tmp/*' -o -path './log/*' -o -path './logs/*' \\) -prune -o -type f -printf '%P\t%T@\t%s\n' 2>/dev/null | sort"
-                ),
-            ],
-        )
-        out = await cmd_ls.stdout()
-        current: dict[str, str] = {}
-        files: list[str] = []
-        for line in (out or "").splitlines():
-            try:
-                rel, mtime, size = line.split("\t", 2)
-            except ValueError:
-                continue
-            files.append(rel)
-            current[rel] = f"{mtime} {size}"
-        # Filter out ignored paths (e.g., __pycache__/, node_modules/, etc.)
-        try:
-            is_ignored = make_ignore_predicate(ctx.context.project or {})
-            filtered_files = [p for p in files if not is_ignored(p)]
-            filtered_current: dict[str, str] = {p: meta for p, meta in current.items() if not is_ignored(p)}
-        except Exception:
-            filtered_files = files
-            filtered_current = current
-        ctx.context.sandbox_files = filtered_files
-        ctx.context.sandbox_file_meta = filtered_current
-    except Exception:
-        # Non-fatal; continue without baseline
-        pass
-
-async def _get_sandbox(ctx: RunContextWrapper[IDEContext]) -> Sandbox:
-    sid = ctx.context.sandbox_id
-    if sid and sid in _SANDBOX_CACHE:
-        return _SANDBOX_CACHE[sid]
-    if sid:
-        fetched = await Sandbox.get(sandbox_id=sid)
-        _SANDBOX_CACHE[sid] = fetched
-        return fetched
-    # create on-demand if none exists
-    sandbox = await Sandbox.create(
-        timeout=600_000,
-        runtime=ctx.context.sandbox_runtime,
-        ports=(ctx.context.sandbox_ports or None),
-    )
-    ctx.context.sandbox_id = sandbox.sandbox_id
-    _SANDBOX_CACHE[sandbox.sandbox_id] = sandbox
-    # Auto-sync current project mapping into the new sandbox working directory
-    try:
-        await _sync_project_files(ctx, sandbox)
-        await _snapshot_files_into_context(ctx, sandbox)
-    except Exception:
-        # best-effort; continue even if sync fails
-        pass
-    return sandbox
-
-
-
 def _parse_env_list(env_list: Optional[List[str]]) -> dict[str, str]:
     """Parse a list of strings like ["KEY=VALUE", ...] into a mapping.
 
@@ -645,6 +565,199 @@ def _parse_env_list(env_list: Optional[List[str]]) -> dict[str, str]:
             result[k] = value
     return result
 
+
+async def _create_synthetic_ruby_runtime(
+    ctx: RunContextWrapper[IDEContext],
+    sandbox: Sandbox,
+    sb_name: str,
+    tool_id: str,
+) -> None:
+    ctx.context.events.append(
+        {
+            "phase": "log",
+            "tool_id": tool_id,
+            "name": "sandbox_create",
+            "data": "Initializing Ruby runtime...\n",
+        }
+    )
+    # Ensure Ruby is present along with common build tools
+    ruby_install_sh = (
+        "if ! command -v ruby >/dev/null 2>&1; then "
+        "dnf install -y ruby3.2 ruby3.2-rubygems ruby3.2-rubygem-json ruby3.2-devel libyaml-devel sqlite sqlite-devel gcc gcc-c++ make git redhat-rpm-config; "
+        "fi; ruby --version; gem --version;"
+    )
+    ruby_cmd = await sandbox.run_command_detached(
+        "bash",
+        ["-lc", ruby_install_sh],
+        sudo=True,
+    )
+    try:
+        async for line in ruby_cmd.logs():
+            ctx.context.events.append(
+                {
+                    "phase": "log",
+                    "tool_id": tool_id,
+                    "name": "sandbox_create",
+                    "data": line.data,
+                }
+            )
+    except Exception:
+        pass
+    _ = await ruby_cmd.wait()
+
+    # Ensure Bundler is available
+    bundler_install_sh = (
+        "if command -v gem >/dev/null 2>&1; then "
+        "gem list -i bundler >/dev/null 2>&1 || gem install --no-document bundler; "
+        "fi; bundle --version || true"
+    )
+    bundler_install_cmd = await sandbox.run_command_detached(
+        "bash",
+        ["-lc", bundler_install_sh],
+        sudo=True,
+    )
+    try:
+        async for line in bundler_install_cmd.logs():
+            ctx.context.events.append(
+                {
+                    "phase": "log",
+                    "tool_id": tool_id,
+                    "name": "sandbox_create",
+                    "data": line.data,
+                }
+            )
+    except Exception:
+        pass
+    _ = await bundler_install_cmd.wait()
+
+    # Configure bundler to install into project-local path
+    bundler_cfg_sh = (
+        f"cd {sandbox.sandbox.cwd} && "
+        "mkdir -p vendor/bundle && "
+        "bundle config set --local path vendor/bundle"
+    )
+    bundler_cfg_cmd = await sandbox.run_command_detached(
+        "bash",
+        ["-lc", bundler_cfg_sh],
+    )
+    try:
+        async for line in bundler_cfg_cmd.logs():
+            ctx.context.events.append(
+                {
+                    "phase": "log",
+                    "tool_id": tool_id,
+                    "name": "sandbox_create",
+                    "data": line.data,
+                }
+            )
+    except Exception:
+        pass
+    _ = await bundler_cfg_cmd.wait()
+
+    # Ensure rack and puma are available (create Gemfile if needed) and generate binstubs
+    rack_puma_setup_sh = (
+        f"cd {sandbox.sandbox.cwd} && "
+        "( [ -f Gemfile ] || bundle init ) && "
+        "bundle add rack puma || true && "
+        "bundle install && "
+        "bundle binstubs rack puma"
+    )
+    rack_puma_cmd = await sandbox.run_command_detached(
+        "bash",
+        ["-lc", rack_puma_setup_sh],
+    )
+    try:
+        async for line in rack_puma_cmd.logs():
+            ctx.context.events.append(
+                {
+                    "phase": "log",
+                    "tool_id": tool_id,
+                    "name": "sandbox_create",
+                    "data": line.data,
+                }
+            )
+    except Exception:
+        pass
+    _ = await rack_puma_cmd.wait()
+
+    # Persist environment defaults for Ruby tooling
+    try:
+        per_env = dict(ctx.context.sandbox_envs.get(sb_name, {}))
+        per_env.update({
+            "BUNDLE_PATH": "vendor/bundle",
+            "PATH": f"/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/share/gems/bin:/usr/share/ruby3.2-gems/bin:/home/vercel-sandbox/.local/share/gem/ruby/bin:/home/vercel-sandbox/.gem/ruby/bin:{sandbox.sandbox.cwd}/bin",
+        })
+        ctx.context.sandbox_envs[sb_name] = per_env
+    except Exception:
+        pass
+
+    ctx.context.events.append(
+        {
+            "phase": "log",
+            "tool_id": tool_id,
+            "name": "sandbox_create",
+            "data": "Synthetic Ruby runtime ready. Bundler configured; rackup and puma installed (binstubs in ./bin).\n",
+        }
+    )
+
+
+async def _create_synthetic_go_runtime(
+    ctx: RunContextWrapper[IDEContext],
+    sandbox: Sandbox,
+    sb_name: str,
+    tool_id: str,
+) -> None:
+    ctx.context.events.append(
+        {
+            "phase": "log",
+            "tool_id": tool_id,
+            "name": "sandbox_create",
+            "data": "Initializing Go runtime...\n",
+        }
+    )
+    go_install_sh = (
+        "if ! command -v go >/dev/null 2>&1; then "
+        "dnf install -y golang git || exit 1; "
+        "fi; go version; git --version || true;"
+    )
+    go_cmd = await sandbox.run_command_detached(
+        "bash",
+        ["-lc", go_install_sh],
+        sudo=True,
+    )
+    try:
+        async for line in go_cmd.logs():
+            ctx.context.events.append(
+                {
+                    "phase": "log",
+                    "tool_id": tool_id,
+                    "name": "sandbox_create",
+                    "data": line.data,
+                }
+            )
+    except Exception:
+        pass
+    _ = await go_cmd.wait()
+
+    # Persist environment defaults for Go tooling
+    try:
+        per_env = dict(ctx.context.sandbox_envs.get(sb_name, {}))
+        per_env.update({
+            "GOPATH": "/home/vercel-sandbox/go",
+            "PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/home/vercel-sandbox/go/bin:" + (per_env.get("PATH") or ""),
+        })
+        ctx.context.sandbox_envs[sb_name] = per_env
+    except Exception:
+        pass
+
+    ctx.context.events.append(
+        {
+            "phase": "log",
+            "tool_id": tool_id,
+            "name": "sandbox_create",
+            "data": "Synthetic Go runtime ready. golang and git installed.\n",
+        }
+    )
 
 @function_tool
 async def sandbox_create(
@@ -698,17 +811,13 @@ async def sandbox_create(
         ctx.context.sandbox_runtime_map[sb_name] = (requested_runtime or effective_runtime)  # type: ignore[arg-type]
     if ports is not None:
         ctx.context.sandbox_ports_map[sb_name] = ports
-    # Update legacy single-sandbox fields for back-compat (point to last created)
-    ctx.context.sandbox_id = sandbox.sandbox_id
-    ctx.context.sandbox_runtime = requested_runtime or effective_runtime
-    ctx.context.sandbox_ports = ports
     _SANDBOX_CACHE[sandbox.sandbox_id] = sandbox
 
     # Sync project files into sandbox cwd
     synced = 0
     try:
         synced = await _sync_project_files(ctx, sandbox)
-        await _snapshot_files_into_context_named(ctx, sandbox, sb_name)
+        await _snapshot_files_into_context(ctx, sandbox, sb_name)
         ctx.context.events.append(
             {
                 "phase": "log",
@@ -730,138 +839,7 @@ async def sandbox_create(
     # If synthetic Ruby runtime requested, bootstrap Ruby and Bundler now
     if is_synthetic_ruby:
         try:
-            ctx.context.events.append(
-                {
-                    "phase": "log",
-                    "tool_id": tool_id,
-                    "name": "sandbox_create",
-                    "data": "Initializing Ruby runtime...\n",
-                }
-            )
-            # Ensure Ruby 3.2+ with development headers and build tools are available in AL2023 base image
-            ruby_install_sh = (
-                "if ! command -v ruby >/dev/null 2>&1; then "
-                "dnf install -y ruby3.2 ruby3.2-rubygems ruby3.2-rubygem-json ruby3.2-devel libyaml-devel sqlite sqlite-devel gcc gcc-c++ make git redhat-rpm-config; "
-                "fi; ruby --version; gem --version;"
-            )
-            ruby_cmd = await sandbox.run_command_detached(
-                "bash",
-                ["-lc", ruby_install_sh],
-                sudo=True,
-            )
-            try:
-                async for line in ruby_cmd.logs():
-                    ctx.context.events.append(
-                        {
-                            "phase": "log",
-                            "tool_id": tool_id,
-                            "name": "sandbox_create",
-                            "data": line.data,
-                        }
-                    )
-            except Exception:
-                pass
-            _ = await ruby_cmd.wait()
-
-            # Ensure Bundler is available system-wide (install with sudo if missing)
-            bundler_install_sh = (
-                "if command -v gem >/dev/null 2>&1; then "
-                "gem list -i bundler >/dev/null 2>&1 || gem install --no-document bundler; "
-                "fi; bundle --version || true"
-            )
-            bundler_install_cmd = await sandbox.run_command_detached(
-                "bash",
-                ["-lc", bundler_install_sh],
-                sudo=True,
-            )
-            try:
-                async for line in bundler_install_cmd.logs():
-                    ctx.context.events.append(
-                        {
-                            "phase": "log",
-                            "tool_id": tool_id,
-                            "name": "sandbox_create",
-                            "data": line.data,
-                        }
-                    )
-            except Exception:
-                pass
-            _ = await bundler_install_cmd.wait()
-
-            # Configure Bundler to install into a project-local path to avoid permission issues
-            bundler_cfg_sh = (
-                f"cd {sandbox.sandbox.cwd} && "
-                "mkdir -p vendor/bundle && "
-                "bundle config set --local path vendor/bundle"
-            )
-            bundler_cfg_cmd = await sandbox.run_command_detached(
-                "bash",
-                ["-lc", bundler_cfg_sh],
-            )
-            try:
-                async for line in bundler_cfg_cmd.logs():
-                    ctx.context.events.append(
-                        {
-                            "phase": "log",
-                            "tool_id": tool_id,
-                            "name": "sandbox_create",
-                            "data": line.data,
-                        }
-                    )
-            except Exception:
-                pass
-            _ = await bundler_cfg_cmd.wait()
-
-            # Ensure rack (rackup) and puma are available via Bundler; create Gemfile if missing
-            rack_puma_setup_sh = (
-                f"cd {sandbox.sandbox.cwd} && "
-                "( [ -f Gemfile ] || bundle init ) && "
-                "bundle add rack puma || true && "
-                "bundle install && "
-                "bundle binstubs rack puma"
-            )
-            rack_puma_cmd = await sandbox.run_command_detached(
-                "bash",
-                ["-lc", rack_puma_setup_sh],
-            )
-            try:
-                async for line in rack_puma_cmd.logs():
-                    ctx.context.events.append(
-                        {
-                            "phase": "log",
-                            "tool_id": tool_id,
-                            "name": "sandbox_create",
-                            "data": line.data,
-                        }
-                    )
-            except Exception:
-                pass
-            _ = await rack_puma_cmd.wait()
-
-            # Set default env for future runs so `bundle install` uses vendor/bundle
-            try:
-                per_env = dict(ctx.context.sandbox_envs.get(sb_name, {}))
-                per_env.update({
-                    "BUNDLE_PATH": "vendor/bundle",
-                    "PATH": f"/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/share/gems/bin:/usr/share/ruby3.2-gems/bin:/home/vercel-sandbox/.local/share/gem/ruby/bin:/home/vercel-sandbox/.gem/ruby/bin:{sandbox.sandbox.cwd}/bin",
-                })
-                ctx.context.sandbox_envs[sb_name] = per_env
-                # Back-compat global defaults too
-                ctx.context.sandbox_env.update({
-                    "BUNDLE_PATH": "vendor/bundle",
-                    "PATH": f"/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/share/gems/bin:/usr/share/ruby3.2-gems/bin:/home/vercel-sandbox/.local/share/gem/ruby/bin:/home/vercel-sandbox/.gem/ruby/bin:{sandbox.sandbox.cwd}/bin",
-                })
-            except Exception:
-                pass
-
-            ctx.context.events.append(
-                {
-                    "phase": "log",
-                    "tool_id": tool_id,
-                    "name": "sandbox_create",
-                    "data": "Synthetic Ruby runtime ready. Bundler configured; rackup and puma installed (binstubs in ./bin).\n",
-                }
-            )
+            await _create_synthetic_ruby_runtime(ctx, sandbox, sb_name, tool_id)
         except Exception as e:
             ctx.context.events.append(
                 {
@@ -875,61 +853,7 @@ async def sandbox_create(
     # If synthetic Go runtime requested, install Go toolchain now
     if is_synthetic_go:
         try:
-            ctx.context.events.append(
-                {
-                    "phase": "log",
-                    "tool_id": tool_id,
-                    "name": "sandbox_create",
-                    "data": "Initializing Go runtime...\n",
-                }
-            )
-            go_install_sh = (
-                "if ! command -v go >/dev/null 2>&1; then "
-                "dnf install -y golang git || exit 1; "
-                "fi; go version; git --version || true;"
-            )
-            go_cmd = await sandbox.run_command_detached(
-                "bash",
-                ["-lc", go_install_sh],
-                sudo=True,
-            )
-            try:
-                async for line in go_cmd.logs():
-                    ctx.context.events.append(
-                        {
-                            "phase": "log",
-                            "tool_id": tool_id,
-                            "name": "sandbox_create",
-                            "data": line.data,
-                        }
-                    )
-            except Exception:
-                pass
-            _ = await go_cmd.wait()
-
-            # Optionally ensure a writable GOPATH bin on PATH (no-op if not used)
-            try:
-                per_env = dict(ctx.context.sandbox_envs.get(sb_name, {}))
-                per_env.update({
-                    "GOPATH": "/home/vercel-sandbox/go",
-                    "PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/home/vercel-sandbox/go/bin:" + (ctx.context.sandbox_env.get("PATH") or ""),
-                })
-                ctx.context.sandbox_envs[sb_name] = per_env
-                # Back-compat global defaults too
-                ctx.context.sandbox_env.update({
-                    "GOPATH": "/home/vercel-sandbox/go",
-                })
-            except Exception:
-                pass
-
-            ctx.context.events.append(
-                {
-                    "phase": "log",
-                    "tool_id": tool_id,
-                    "name": "sandbox_create",
-                    "data": "Synthetic Go runtime ready. golang and git installed.\n",
-                }
-            )
+            await _create_synthetic_go_runtime(ctx, sandbox, sb_name, tool_id)
         except Exception as e:
             ctx.context.events.append(
                 {
@@ -974,7 +898,7 @@ async def sandbox_stop(ctx: RunContextWrapper[IDEContext], name: Optional[str] =
         }
     )
     sb_name = _normalize_sandbox_name(ctx, name)
-    sid = (ctx.context.sandbox_name_to_id or {}).get(sb_name) or (ctx.context.sandbox_id if sb_name == "default" else None)
+    sid = (ctx.context.sandbox_name_to_id or {}).get(sb_name)
     if not sid:
         output = {"stopped": False, "error": "no sandbox"}
     else:
@@ -996,8 +920,6 @@ async def sandbox_stop(ctx: RunContextWrapper[IDEContext], name: Optional[str] =
                 ctx.context.sandbox_name_to_id.pop(sb_name, None)
             if ctx.context.active_sandbox == sb_name:
                 ctx.context.active_sandbox = None
-            if sb_name == "default":
-                ctx.context.sandbox_id = None
             output = {"stopped": True}
         except Exception as e:
             output = {"stopped": False, "error": str(e)}
@@ -1099,7 +1021,7 @@ async def sandbox_run(
                 or ("bin/rails" in cln and not is_rails_new)
             ) and not is_rails_new
         if rails_related:
-            files = ctx.context.sandbox_files or []
+            files = (ctx.context.sandbox_files_map or {}).get(sb_name, [])
             # find unique app roots by locating */bin/rails
             app_roots: list[str] = []
             for p in files:
@@ -1135,7 +1057,7 @@ async def sandbox_run(
     # Ensure the sandbox has the latest project files before executing
     try:
         synced_count = await _sync_project_files(ctx, sandbox)
-        await _snapshot_files_into_context(ctx, sandbox)
+        await _snapshot_files_into_context(ctx, sandbox, sb_name)
         if stream_logs:
             ctx.context.events.append(
                 {
@@ -1158,7 +1080,7 @@ async def sandbox_run(
 
     # Parse list-form env (e.g., ["KEY=VALUE"]) into a dict and merge with defaults
     per_env = (ctx.context.sandbox_envs or {}).get(sb_name, {})
-    full_env = {**(ctx.context.sandbox_env or {}), **per_env, **(_parse_env_list(env) if env else {})}
+    full_env = {**per_env, **(_parse_env_list(env) if env else {})}
     cd_prefix = f"cd {safe_cwd} && "
 
     # Heuristics: if this looks like a Python task (pip/python/uvicorn), ensure python + pip are ready
@@ -1317,10 +1239,12 @@ async def sandbox_run(
 
         # Ensure PATH includes common gem bin locations for subsequent commands
         try:
-            ctx.context.sandbox_env.update({
+            per_env_global = dict(ctx.context.sandbox_envs.get(sb_name, {}))
+            per_env_global.update({
                 "PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/share/gems/bin:/usr/share/ruby3.2-gems/bin:/home/vercel-sandbox/.local/share/gem/ruby/bin:/home/vercel-sandbox/.gem/ruby/bin",
                 "BUNDLE_PATH": "vendor/bundle",
             })
+            ctx.context.sandbox_envs[sb_name] = per_env_global
         except Exception:
             pass
 
@@ -1580,7 +1504,7 @@ async def sandbox_run(
                     continue
                 files.append(rel)
                 current[rel] = f"{mtime} {size}"
-            prev = ctx.context.sandbox_file_meta or {}
+            prev = (ctx.context.sandbox_file_meta_map or {}).get(sb_name, {})
             created: list[str] = []
             updated: list[str] = []
             deleted: list[str] = []
@@ -1604,8 +1528,9 @@ async def sandbox_run(
             except Exception:
                 pass
 
-            ctx.context.sandbox_files = files
-            ctx.context.sandbox_file_meta = current
+            # Update per-sandbox snapshot
+            ctx.context.sandbox_files_map[sb_name] = files
+            ctx.context.sandbox_file_meta_map[sb_name] = current
             # Optionally sample contents of small created/updated files for frontend resync
             data: list[dict[str, Any]] = []
             sample_paths = created + updated
@@ -1772,9 +1697,7 @@ async def sandbox_set_env(ctx: RunContextWrapper[IDEContext], env: List[str], na
         }
     )
     parsed = _parse_env_list(env)
-    # Back-compat: also update global
-    ctx.context.sandbox_env.update(parsed)
-    # Per-sandbox env
+    # Per-sandbox env only
     per_env = dict(ctx.context.sandbox_envs.get(sb_name, {}))
     for k, v in parsed.items():
         if k not in per_env:

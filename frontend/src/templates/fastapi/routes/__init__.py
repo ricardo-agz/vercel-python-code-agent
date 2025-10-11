@@ -6,3 +6,11 @@ api_router = APIRouter()
 api_router.include_router(items_router, prefix="/items", tags=["items"])
 api_router.include_router(users_router, prefix="/users", tags=["users"])
 
+@api_router.get('/health')
+def health():
+    return { 'status': 'ok' }
+
+@api_router.get('/ping')
+def ping():
+    return { 'message': 'pong' }
+

@@ -1,4 +1,6 @@
 import React from 'react';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import { MessageSquare, Loader, Box, Code2, Cpu, Gem, ExternalLink, Settings } from 'lucide-react';
 import type { Action, ExecResultAction } from '../types/run';
 
@@ -42,7 +44,9 @@ export const Timeline: React.FC<TimelineProps> = ({ actions, isEmpty, loading, o
                 return (
                 <div key={key} className="mr-4">
                   <div className="px-3 py-2 rounded-lg" style={{ backgroundColor: 'var(--vscode-surface)', color: 'var(--vscode-text)' }}>
-                      <p className="text-sm whitespace-pre-wrap break-words" style={{ overflowWrap: 'anywhere', wordBreak: 'break-word' }}>{action.message || ''}</p>
+                      <div className="text-sm prose prose-invert max-w-none break-words" style={{ overflowWrap: 'anywhere', wordBreak: 'break-word' }}>
+                        <ReactMarkdown remarkPlugins={[remarkGfm]}>{action.message || ''}</ReactMarkdown>
+                      </div>
                     </div>
                   </div>
                 );
@@ -246,14 +250,21 @@ export const Timeline: React.FC<TimelineProps> = ({ actions, isEmpty, loading, o
                     {action.content || ''}
                   </div>
                 );
-              case 'final_answer':
+              case 'final_answer': {
+                const content = action.content || '';
                 return (
                 <div key={key} className="mr-4">
                   <div className="px-3 py-2 rounded-lg" style={{ backgroundColor: 'var(--vscode-surface)', color: 'var(--vscode-text)' }}>
-                      <p className="text-sm whitespace-pre-wrap break-words" style={{ overflowWrap: 'anywhere', wordBreak: 'break-word' }}>{action.content || ''}</p>
+                      <div
+                        className="text-sm prose prose-invert max-w-none break-words"
+                        style={{ overflowWrap: 'anywhere', wordBreak: 'break-word' }}
+                      >
+                        <ReactMarkdown remarkPlugins={[remarkGfm]}>{content}</ReactMarkdown>
+                      </div>
                     </div>
                   </div>
                 );
+              }
               default:
                 return null;
             }
