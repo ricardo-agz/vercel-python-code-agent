@@ -1,6 +1,6 @@
 import React from 'react';
 import Editor, { DiffEditor, useMonaco } from '@monaco-editor/react';
-import { Play, Square, ExternalLink } from 'lucide-react';
+import { Play, Square, ExternalLink, ChevronLeft, ChevronRight } from 'lucide-react';
 import type * as monaco from 'monaco-editor';
 
 type DiffEditorRef = monaco.editor.IStandaloneDiffEditor | null;
@@ -20,6 +20,10 @@ interface EditorPaneProps {
   onStatusChange?: (status: { line: number; column: number; language: string }) => void;
   // Triggered when user presses Cmd/Ctrl+K with a non-empty selection
   onRequestCodeFix?: (args: { fileName: string; startLine: number; endLine: number; selectedCode: string }) => void;
+  // List of files with proposed changes (for navigation)
+  proposedFiles?: string[];
+  // Navigate to another proposed file
+  onNavigateProposedFile?: (path: string) => void;
 }
 
 export const EditorPane: React.FC<EditorPaneProps> = ({
@@ -36,6 +40,8 @@ export const EditorPane: React.FC<EditorPaneProps> = ({
   onOpenPreview,
   onStatusChange,
   onRequestCodeFix,
+  proposedFiles,
+  onNavigateProposedFile,
 }) => {
   const diffEditorRef = React.useRef<DiffEditorRef>(null);
   const editorRef = React.useRef<monaco.editor.IStandaloneCodeEditor | null>(null);
@@ -162,6 +168,74 @@ export const EditorPane: React.FC<EditorPaneProps> = ({
     }
   }, [fileName]);
 
+  // Image handling
+  const fileExtension = React.useMemo(() => {
+    const name = (fileName || '').toLowerCase();
+    const idx = name.lastIndexOf('.');
+    return idx >= 0 ? name.slice(idx + 1) : '';
+  }, [fileName]);
+
+  const isImage = React.useMemo(() => {
+    return ['png','jpg','jpeg','gif','svg','webp','bmp'].includes(fileExtension);
+  }, [fileExtension]);
+
+  const mimeFromExt = React.useCallback((ext: string) => {
+    switch (ext) {
+      case 'png': return 'image/png';
+      case 'jpg':
+      case 'jpeg': return 'image/jpeg';
+      case 'gif': return 'image/gif';
+      case 'svg': return 'image/svg+xml';
+      case 'webp': return 'image/webp';
+      case 'bmp': return 'image/bmp';
+      default: return 'application/octet-stream';
+    }
+  }, []);
+
+  const buildImageSrc = React.useCallback((content: string | null | undefined) => {
+    if (!isImage) return null;
+    const txt = (content || '').trim();
+    if (!txt) return null;
+    // If already a data URL, use as-is
+    if (/^data:image\//i.test(txt)) return txt;
+    // If looks like a URL (http(s), blob, or absolute /assets path), use directly
+    if (/^(https?:|blob:|\/)/i.test(txt)) return txt;
+    // SVG markup
+    if (fileExtension === 'svg' || /^<svg[\s\S]*<\/svg>$/i.test(txt)) {
+      try {
+        return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(txt)}`;
+      } catch {
+        // fallthrough
+      }
+    }
+    const mime = mimeFromExt(fileExtension);
+    // Heuristic: if it looks like base64, wrap it
+    const compact = txt.replace(/\s+/g, '');
+    if (/^[A-Za-z0-9+/=]+$/.test(compact) && compact.length % 4 === 0 && compact.length > 64) {
+      return `data:${mime};base64,${compact}`;
+    }
+    // Fallback: treat the string as binary data and create a Blob URL
+    try {
+      const buf = new Uint8Array(txt.length);
+      for (let i = 0; i < txt.length; i += 1) buf[i] = txt.charCodeAt(i) & 0xff;
+      const blob = new Blob([buf], { type: mime });
+      return URL.createObjectURL(blob);
+    } catch {
+      return null;
+    }
+  }, [isImage, fileExtension, mimeFromExt]);
+
+  const imageSrc = React.useMemo(() => buildImageSrc(code), [buildImageSrc, code]);
+  const proposedImageSrc = React.useMemo(() => buildImageSrc(proposedContent), [buildImageSrc, proposedContent]);
+
+  // Revoke blob URLs on change/unmount
+  React.useEffect(() => {
+    return () => {
+      if (imageSrc && imageSrc.startsWith('blob:')) URL.revokeObjectURL(imageSrc);
+      if (proposedImageSrc && proposedImageSrc.startsWith('blob:')) URL.revokeObjectURL(proposedImageSrc);
+    };
+  }, [imageSrc, proposedImageSrc]);
+
   const showRunButton = React.useMemo(() => {
     return language === 'javascript' || language === 'typescript' || language === 'python';
   }, [language]);
@@ -202,6 +276,22 @@ export const EditorPane: React.FC<EditorPaneProps> = ({
       onStatusChange({ line: pos?.lineNumber || 1, column: pos?.column || 1, language });
     }
   }, [language, onStatusChange]);
+
+  // Proposed-files navigation derivations
+  const proposedList = React.useMemo(() => Array.isArray(proposedFiles) ? proposedFiles : [], [proposedFiles]);
+  const currentIndex = React.useMemo(() => proposedList.indexOf(fileName || ''), [proposedList, fileName]);
+  const totalProposed = proposedList.length;
+  const hasProposals = totalProposed > 0;
+  const prevIndex = currentIndex >= 0 ? Math.max(currentIndex - 1, 0) : Math.max(totalProposed - 1, 0);
+  const nextIndex = currentIndex >= 0 ? Math.min(currentIndex + 1, Math.max(totalProposed - 1, 0)) : 0;
+  const goPrev = React.useCallback(() => {
+    if (!hasProposals || !onNavigateProposedFile) return;
+    onNavigateProposedFile(proposedList[prevIndex]);
+  }, [hasProposals, onNavigateProposedFile, proposedList, prevIndex]);
+  const goNext = React.useCallback(() => {
+    if (!hasProposals || !onNavigateProposedFile) return;
+    onNavigateProposedFile(proposedList[nextIndex]);
+  }, [hasProposals, onNavigateProposedFile, proposedList, nextIndex]);
 
   return (
     <div className="flex-1 flex flex-col" style={{ width: '100%' }}>
@@ -250,8 +340,38 @@ export const EditorPane: React.FC<EditorPaneProps> = ({
         )}
       </div>
       <div className="flex-1 min-h-0 overflow-hidden relative">
-        {proposedContent === null ? (
-          <Editor
+        {isImage ? (
+          proposedContent === null ? (
+            <div className="h-full w-full flex items-center justify-center overflow-auto" style={{ backgroundColor: 'var(--vscode-bg)' }}>
+              {imageSrc ? (
+                <img src={imageSrc} alt={fileName} style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain' }} />
+              ) : (
+                <div className="text-sm" style={{ color: 'var(--vscode-subtle)' }}>No preview available</div>
+              )}
+            </div>
+          ) : (
+            <div className="h-full w-full flex items-stretch gap-2 p-2 overflow-auto" style={{ backgroundColor: 'var(--vscode-bg)' }}>
+              <div className="flex-1 min-w-0 flex flex-col items-center justify-center" style={{ border: '1px solid var(--vscode-panel-border)' }}>
+                <div className="text-xs uppercase tracking-wide mb-1" style={{ color: 'var(--vscode-muted)' }}>Current</div>
+                {imageSrc ? (
+                  <img src={imageSrc} alt={`${fileName} (current)`} style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain' }} />
+                ) : (
+                  <div className="text-sm" style={{ color: 'var(--vscode-subtle)' }}>No current preview</div>
+                )}
+              </div>
+              <div className="flex-1 min-w-0 flex flex-col items-center justify-center" style={{ border: '1px solid var(--vscode-panel-border)' }}>
+                <div className="text-xs uppercase tracking-wide mb-1" style={{ color: 'var(--vscode-muted)' }}>Proposed</div>
+                {proposedImageSrc ? (
+                  <img src={proposedImageSrc} alt={`${fileName} (proposed)`} style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain' }} />
+                ) : (
+                  <div className="text-sm" style={{ color: 'var(--vscode-subtle)' }}>No proposed preview</div>
+                )}
+              </div>
+            </div>
+          )
+        ) : (
+          proposedContent === null ? (
+            <Editor
             key={fileName}
             height="100%"
             path={`file:///${fileName}`}
@@ -386,9 +506,9 @@ export const EditorPane: React.FC<EditorPaneProps> = ({
               scrollBeyondLastLine: false,
               automaticLayout: true,
             }}
-          />
-        ) : (
-          <DiffEditor
+            />
+          ) : (
+            <DiffEditor
             key={`diff:${fileName}`}
             keepCurrentOriginalModel={true}
             keepCurrentModifiedModel={true}
@@ -509,6 +629,7 @@ export const EditorPane: React.FC<EditorPaneProps> = ({
               automaticLayout: true,
             }}
           />
+          )
         )}
 
         {proposedContent !== null && (
@@ -546,6 +667,45 @@ export const EditorPane: React.FC<EditorPaneProps> = ({
               title="Accept all proposed changes"
             >
               Accept all
+            </button>
+          </div>
+        )}
+
+        {totalProposed > 0 && (
+          <div
+            className="absolute flex items-center gap-2 rounded shadow-lg"
+            style={{
+              bottom: 12,
+              right: 12,
+              backgroundColor: 'var(--vscode-panel)',
+              border: '1px solid var(--vscode-panel-border)',
+              padding: '6px 10px',
+              zIndex: 10,
+            }}
+            aria-label="Navigate files with proposed changes"
+          >
+            <button
+              onClick={goPrev}
+              disabled={!hasProposals}
+              className="px-2 py-1 rounded-sm disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer flex items-center"
+              title="Previous file with proposed changes"
+              aria-label="Previous file with proposed changes"
+              style={{ background: 'var(--vscode-surface)', color: 'var(--vscode-text)', border: '1px solid var(--vscode-panel-border)' }}
+            >
+              <ChevronLeft className="w-4 h-4" />
+            </button>
+            <div className="text-xs" style={{ color: 'var(--vscode-text)' }}>
+              {(currentIndex >= 0 ? currentIndex + 1 : 1)} / {totalProposed} files
+            </div>
+            <button
+              onClick={goNext}
+              disabled={!hasProposals}
+              className="px-2 py-1 rounded-sm disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer flex items-center"
+              title="Next file with proposed changes"
+              aria-label="Next file with proposed changes"
+              style={{ background: 'var(--vscode-surface)', color: 'var(--vscode-text)', border: '1px solid var(--vscode-panel-border)' }}
+            >
+              <ChevronRight className="w-4 h-4" />
             </button>
           </div>
         )}

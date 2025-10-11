@@ -6,9 +6,10 @@ interface TimelineProps {
   actions: Action[];
   isEmpty: boolean;
   loading: boolean;
+  onOpenFile?: (path: string) => void;
 }
 
-export const Timeline: React.FC<TimelineProps> = ({ actions, isEmpty, loading }) => {
+export const Timeline: React.FC<TimelineProps> = ({ actions, isEmpty, loading, onOpenFile }) => {
   const [expanded, setExpanded] = React.useState<Record<string, boolean>>({});
 
   const toggle = (id: string) => setExpanded(prev => ({ ...prev, [id]: !prev[id] }));
@@ -130,7 +131,15 @@ export const Timeline: React.FC<TimelineProps> = ({ actions, isEmpty, loading })
                 if (action.toolName === 'edit_code' && res?.file_path && res.find_start_line && res.find_end_line) {
                   return (
                     <div key={key} className="text-xs text-purple-400">
-                      <span className="text-gray-300">{res.file_path}</span>{' '}
+                      <button
+                        type="button"
+                        onClick={() => onOpenFile?.(((res.file_path as unknown) as string).replace(/^\//,''))}
+                        className="text-gray-300 underline-offset-2 hover:underline"
+                        style={{ cursor: 'pointer' }}
+                        title="Open file"
+                      >
+                        {res.file_path}
+                      </button>{' '}
                       {res.find_start_line === res.find_end_line
                         ? `edited line ${res.find_start_line}`
                         : `edited lines ${res.find_start_line}-${res.find_end_line}`}
@@ -140,7 +149,16 @@ export const Timeline: React.FC<TimelineProps> = ({ actions, isEmpty, loading })
                 if (action.toolName === 'create_file' && res?.file_path) {
                   return (
                     <div key={key} className="text-xs text-green-400">
-                      created {res.file_path}
+                      created{' '}
+                      <button
+                        type="button"
+                        onClick={() => onOpenFile?.(((res.file_path as unknown) as string).replace(/^\//,''))}
+                        className="text-gray-300 underline-offset-2 hover:underline"
+                        style={{ cursor: 'pointer' }}
+                        title="Open file"
+                      >
+                        {res.file_path}
+                      </button>
                     </div>
                   );
                 }

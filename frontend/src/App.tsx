@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import JSZipLib from 'jszip';
 import { useAgentStream } from './hooks/useAgentStream';
 import { useAgentEvents } from './hooks/useAgentEvents';
 import { useChat } from './hooks/useChat';
@@ -21,6 +22,7 @@ import { CodeFixModal } from './components/CodeFixModal';
 import ProjectTabs, { type ProjectTab } from './components/ProjectTabs';
 import NewProjectModal from './components/NewProjectModal';
 import { getTemplateById, TEMPLATES } from './templates/index';
+import { loadPersistedState, savePersistedState, type PersistedState, type PersistedProjectState } from './lib/persistence';
 
 type ResizableCenterProps = {
   code: string;
@@ -28,6 +30,7 @@ type ResizableCenterProps = {
   proposals: Record<string, string>;
   clearProposal: (file: string) => void;
   activeFile: string;
+  onSelectFile: (path: string) => void;
   onRun: () => void;
   running: boolean;
   onStop: () => void;
@@ -39,7 +42,7 @@ type ResizableCenterProps = {
   isIgnored?: (path: string) => boolean;
 };
 
-const ResizableCenter: React.FC<ResizableCenterProps> = ({ code, setCode, proposals, clearProposal, activeFile, onRun, running, onStop, previewUrl, onOpenPreview, terminalLogs, onClearLogs, onRequestCodeFix, isIgnored }) => {
+const ResizableCenter: React.FC<ResizableCenterProps> = ({ code, setCode, proposals, clearProposal, activeFile, onSelectFile, onRun, running, onStop, previewUrl, onOpenPreview, terminalLogs, onClearLogs, onRequestCodeFix, isIgnored }) => {
   const containerRef = React.useRef<HTMLDivElement>(null);
   const [terminalHeight, setTerminalHeight] = React.useState<number>(200);
   const [resizing, setResizing] = React.useState<boolean>(false);
@@ -102,6 +105,16 @@ const ResizableCenter: React.FC<ResizableCenterProps> = ({ code, setCode, propos
           onOpenPreview={onOpenPreview}
           onStatusChange={setStatus}
           onRequestCodeFix={onRequestCodeFix}
+          proposedFiles={React.useMemo(() => {
+            const list: string[] = [];
+            for (const k of Object.keys(proposals)) {
+              if (!isIgnored || !isIgnored(k)) list.push(k);
+            }
+            // Ensure the current file is included if it has a proposal but is ignored by filters
+            if (proposals[activeFile] !== undefined && !list.includes(activeFile)) list.push(activeFile);
+            return list.sort((a,b) => a.localeCompare(b));
+          }, [proposals, isIgnored, activeFile])}
+          onNavigateProposedFile={(path) => onSelectFile((path || '').replace(/^\//,''))}
         />
       </div>
       {terminalLogs && terminalLogs.length > 0 ? (
@@ -153,34 +166,7 @@ function App() {
   const { isAuthenticated, user, openModal } = useAuth();
 
   // Persisted state (projects + code) storage
-  type PersistedProjectState = {
-    files: Record<string, string>;
-    activeFile: string;
-    folders?: string[];
-    expandedFolders?: string[];
-    model?: string;
-  };
-  type PersistedState = {
-    projects: ProjectTab[];
-    activeProjectId: string;
-    projectStates: Record<string, PersistedProjectState>;
-    version?: number;
-  };
-  const STORAGE_KEY = 'nfca_state_v1';
-  const persisted = React.useMemo<PersistedState | null>(() => {
-    if (typeof window === 'undefined') return null;
-    try {
-      const raw = localStorage.getItem(STORAGE_KEY);
-      if (!raw) return null;
-      const parsed = JSON.parse(raw) as PersistedState;
-      if (!parsed || !Array.isArray(parsed.projects) || typeof parsed.activeProjectId !== 'string' || typeof parsed.projectStates !== 'object') {
-        return null;
-      }
-      return parsed;
-    } catch {
-      return null;
-    }
-  }, []);
+  const persisted = React.useMemo<PersistedState | null>(() => loadPersistedState(), []);
 
   // Multi-project state
   const initialProjectId = React.useMemo(() => (persisted?.activeProjectId || `proj_${Date.now().toString(36)}_${Math.random().toString(36).slice(2,7)}`), [persisted]);
@@ -271,30 +257,25 @@ function App() {
 
   // Save to localStorage whenever projects or code change
   React.useEffect(() => {
-    if (typeof window === 'undefined') return;
-    try {
-      // Only persist essential, non-ephemeral fields
-      const projectStatesToPersist: Record<string, PersistedProjectState> = {};
-      for (const [id, st] of Object.entries(projectStates)) {
-        projectStatesToPersist[id] = {
-          files: st.files,
-          activeFile: st.activeFile,
-          folders: st.folders,
-          expandedFolders: st.expandedFolders,
-          model: st.model,
-        };
-      }
-      const activeIdSafe = projects.some(p => p.id === activeProjectId) ? activeProjectId : (projects[0]?.id || '');
-      const toSave: PersistedState = {
-        version: 1,
-        projects,
-        activeProjectId: activeIdSafe,
-        projectStates: projectStatesToPersist,
+    // Only persist essential, non-ephemeral fields
+    const projectStatesToPersist: Record<string, PersistedProjectState> = {};
+    for (const [id, st] of Object.entries(projectStates)) {
+      projectStatesToPersist[id] = {
+        files: st.files,
+        activeFile: st.activeFile,
+        folders: st.folders,
+        expandedFolders: st.expandedFolders,
+        model: st.model,
       };
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(toSave));
-    } catch {
-      // ignore quota or serialization errors
     }
+    const activeIdSafe = projects.some(p => p.id === activeProjectId) ? activeProjectId : (projects[0]?.id || '');
+    const toSave: PersistedState = {
+      version: 1,
+      projects,
+      activeProjectId: activeIdSafe,
+      projectStates: projectStatesToPersist,
+    };
+    savePersistedState(toSave);
   }, [projects, activeProjectId, projectStates]);
 
   // Empty projects state flag (used for conditional rendering)
@@ -847,6 +828,30 @@ function App() {
                 if (nextActive) setActiveProjectId(nextActive);
               }
             }}
+            onDownload={async () => {
+              try {
+                const zip = new JSZipLib();
+                const rootName = (projects.find(p => p.id === activeProjectId)?.name || 'project').replace(/\s+/g, '_');
+                const folder = zip.folder(rootName);
+                // Include all current project files; proposals are suggestions only
+                Object.entries(project).forEach(([path, content]) => {
+                  const normalized = (path || '').replace(/^\//,'');
+                  if (!normalized) return;
+                  folder.file(normalized, content ?? '');
+                });
+                const blob = await zip.generateAsync({ type: 'blob' });
+                const a = document.createElement('a');
+                const url = URL.createObjectURL(blob);
+                a.href = url;
+                a.download = `${rootName}.zip`;
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                URL.revokeObjectURL(url);
+              } catch (e) {
+                console.error('Failed to download ZIP', e);
+              }
+            }}
           />
         )}
       left={(
@@ -1054,6 +1059,7 @@ function App() {
             proposals={proposals}
             clearProposal={clearProposal}
             activeFile={activeFile}
+            onSelectFile={setActiveFile}
             onRun={handleRun}
             running={Boolean(play.sandboxId) && (play.status === 'running' || play.status === 'starting')}
             onStop={handleStop}
@@ -1086,6 +1092,19 @@ function App() {
               actions={timelineActions}
               isEmpty={timelineActions.length === 0}
               loading={loading || timelineActions.some(a => a.status === 'running')}
+              onOpenFile={(path) => {
+                const normalized = (path || '').replace(/^\//,'');
+                if (!normalized) return;
+                if (!project[normalized]) {
+                  // If the file exists only as a proposal, open it (to view with proposedContent)
+                  if (proposals[normalized] !== undefined) {
+                    setProject(prev => ({ ...prev, [normalized]: prev[normalized] ?? '' }));
+                  } else {
+                    // Otherwise do nothing
+                  }
+                }
+                setActiveFile(normalized);
+              }}
             />
             <div className="px-4 py-2">
               <ModelPicker value={model} onChange={setModel} />

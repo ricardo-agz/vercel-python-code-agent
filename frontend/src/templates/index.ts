@@ -46,17 +46,22 @@ const TEMPLATE_METADATA = [
   },
   {
     id: 'react_fastapi',
-    label: 'React + FastAPI',
-    description: 'Decoupled frontend (React) and backend (FastAPI)',
+    label: 'Next.js + FastAPI',
+    description: 'Decoupled frontend (Next.js) and backend (FastAPI)',
     directory: 'react-fastapi',
     defaultActiveFile: 'backend/main.py',
   },
 ];
 
 // Use Vite's glob import to load all template files at build time
-const templateFiles = import.meta.glob('./**/*', { 
+// Text-like files are loaded as raw strings; binary image assets are loaded as URLs
+const templateTextFiles = import.meta.glob('./**/*', {
   as: 'raw',
-  eager: true 
+  eager: true,
+});
+const templateImageUrls = import.meta.glob('./**/*.{png,jpg,jpeg,gif,webp,bmp}', {
+  as: 'url',
+  eager: true,
 });
 
 // Build the templates object with files loaded from disk
@@ -67,19 +72,23 @@ function buildTemplates(): ProjectTemplate[] {
     const files: Record<string, string> = {};
     const prefix = `./${meta.directory}/`;
 
-    // Find all files for this template
-    for (const [path, content] of Object.entries(templateFiles)) {
+    const isBinaryImage = (p: string) => /\.(png|jpg|jpeg|gif|webp|bmp)$/i.test(p);
+
+    // Add image URLs first (so they are not overridden by raw loader)
+    for (const [path, url] of Object.entries(templateImageUrls)) {
       if (path.startsWith(prefix) && path !== prefix) {
-        // Remove the template directory prefix to get relative path
         const relativePath = path.slice(prefix.length);
-        
-        // Skip metadata files (but keep README.md for templates that use it)
-        if (relativePath === 'index.ts') {
-          continue;
-        }
-        
-        files[relativePath] = content as string;
+        files[relativePath] = url as string; // store URL for binary images
       }
+    }
+
+    // Add raw files but skip binary images (handled above). SVGs remain raw (editable text)
+    for (const [path, content] of Object.entries(templateTextFiles)) {
+      if (!path.startsWith(prefix) || path === prefix) continue;
+      const relativePath = path.slice(prefix.length);
+      if (relativePath === 'index.ts') continue; // skip metadata index
+      if (isBinaryImage(relativePath)) continue; // avoid corrupting binary assets
+      files[relativePath] = content as string;
     }
 
     templates.push({

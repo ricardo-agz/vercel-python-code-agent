@@ -1,5 +1,5 @@
 import React from 'react';
-import { Plus, Pencil, Trash2, Check, X } from 'lucide-react';
+import { Plus, Pencil, Trash2, Check, X, Download } from 'lucide-react';
 
 export type ProjectTab = {
   id: string;
@@ -13,9 +13,10 @@ type ProjectTabsProps = {
   onAdd: () => void;
   onRename: (id: string, name: string) => void;
   onDelete: (id: string) => void;
+  onDownload: () => void;
 };
 
-const ProjectTabs: React.FC<ProjectTabsProps> = ({ projects, activeProjectId, onSelect, onAdd, onRename, onDelete }) => {
+const ProjectTabs: React.FC<ProjectTabsProps> = ({ projects, activeProjectId, onSelect, onAdd, onRename, onDelete, onDownload }) => {
   const [renamingId, setRenamingId] = React.useState<string | null>(null);
   const [renameValue, setRenameValue] = React.useState<string>('');
   const renameInputRef = React.useRef<HTMLInputElement>(null);
@@ -137,6 +138,17 @@ const ProjectTabs: React.FC<ProjectTabsProps> = ({ projects, activeProjectId, on
         </div>
       </div>
       <div className="pr-2 flex items-center h-full">
+        <button
+          type="button"
+          onClick={onDownload}
+          className="inline-flex items-center gap-1 px-2 py-1 text-sm rounded cursor-pointer mr-2"
+          style={{ background: 'var(--vscode-surface)', color: 'var(--vscode-text)', border: '1px solid var(--vscode-panel-border)' }}
+          title="Download ZIP"
+          aria-label="Download ZIP"
+        >
+          <Download className="w-4 h-4" />
+          <span>Download ZIP</span>
+        </button>
         <button
           type="button"
           onClick={onAdd}
