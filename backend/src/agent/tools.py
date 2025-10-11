@@ -676,12 +676,13 @@ async def sandbox_create(
 
     sb_name = _normalize_sandbox_name(ctx, name)
 
-    # Synthetic Ruby runtime: if a ruby runtime is requested, create on a Node runtime
+    # Synthetic runtimes: if a Ruby or Go runtime is requested, create on a Node runtime and bootstrap
     requested_runtime = runtime
     is_synthetic_ruby = bool(requested_runtime and str(requested_runtime).lower().startswith("ruby"))
+    is_synthetic_go = bool(requested_runtime and str(requested_runtime).lower().startswith("go"))
     effective_runtime = requested_runtime
-    if is_synthetic_ruby:
-        # Default to node22 as the base image for Ruby bootstrapping
+    if is_synthetic_ruby or is_synthetic_go:
+        # Default to node22 as the base image for bootstrapping
         effective_runtime = "node22"
 
     sandbox = await Sandbox.create(
@@ -871,6 +872,74 @@ async def sandbox_create(
                 }
             )
 
+    # If synthetic Go runtime requested, install Go toolchain now
+    if is_synthetic_go:
+        try:
+            ctx.context.events.append(
+                {
+                    "phase": "log",
+                    "tool_id": tool_id,
+                    "name": "sandbox_create",
+                    "data": "Initializing Go runtime...\n",
+                }
+            )
+            go_install_sh = (
+                "if ! command -v go >/dev/null 2>&1; then "
+                "dnf install -y golang git || exit 1; "
+                "fi; go version; git --version || true;"
+            )
+            go_cmd = await sandbox.run_command_detached(
+                "bash",
+                ["-lc", go_install_sh],
+                sudo=True,
+            )
+            try:
+                async for line in go_cmd.logs():
+                    ctx.context.events.append(
+                        {
+                            "phase": "log",
+                            "tool_id": tool_id,
+                            "name": "sandbox_create",
+                            "data": line.data,
+                        }
+                    )
+            except Exception:
+                pass
+            _ = await go_cmd.wait()
+
+            # Optionally ensure a writable GOPATH bin on PATH (no-op if not used)
+            try:
+                per_env = dict(ctx.context.sandbox_envs.get(sb_name, {}))
+                per_env.update({
+                    "GOPATH": "/home/vercel-sandbox/go",
+                    "PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/home/vercel-sandbox/go/bin:" + (ctx.context.sandbox_env.get("PATH") or ""),
+                })
+                ctx.context.sandbox_envs[sb_name] = per_env
+                # Back-compat global defaults too
+                ctx.context.sandbox_env.update({
+                    "GOPATH": "/home/vercel-sandbox/go",
+                })
+            except Exception:
+                pass
+
+            ctx.context.events.append(
+                {
+                    "phase": "log",
+                    "tool_id": tool_id,
+                    "name": "sandbox_create",
+                    "data": "Synthetic Go runtime ready. golang and git installed.\n",
+                }
+            )
+        except Exception as e:
+            ctx.context.events.append(
+                {
+                    "phase": "log",
+                    "tool_id": tool_id,
+                    "name": "sandbox_create",
+                    "data": f"Go bootstrap error: {str(e)}\n",
+                }
+            )
+
     output = {
         "sandbox_id": sandbox.sandbox_id,
         "status": getattr(sandbox, "status", None),
@@ -878,7 +947,7 @@ async def sandbox_create(
         "ports": ports,
         "synced_files": synced,
         "name": sb_name,
-        **({"synthetic_runtime": True, "effective_runtime": effective_runtime} if is_synthetic_ruby else {}),
+        **({"synthetic_runtime": True, "effective_runtime": effective_runtime} if (is_synthetic_ruby or is_synthetic_go) else {}),
     }
     ctx.context.events.append(
         {
@@ -958,6 +1027,7 @@ async def sandbox_run(
     auto_python_ensure: bool = True,
     auto_ready_patterns: bool = True,
     auto_ruby_ensure: bool = True,
+    auto_go_ensure: bool = True,
 ) -> str:
     """Run a shell command in the active sandbox, optionally streaming logs and detecting readiness.
 
@@ -999,7 +1069,7 @@ async def sandbox_run(
     except Exception:
         safe_cwd = base_cwd
 
-    # Precompute lower-cased command and Ruby usage before heuristics that reference it
+    # Precompute lower-cased command and Ruby/Go usage before heuristics that reference it
     cmd_lower = (command or "").lower()
     uses_ruby = (
         (" gem " in cmd_lower)
@@ -1012,6 +1082,7 @@ async def sandbox_run(
         or ("sinatra" in cmd_lower)
         or ("rails " in cmd_lower)
     )
+    uses_go = (" go " in f" {cmd_lower} ") or cmd_lower.startswith("go ")
 
     # Heuristic: auto-select Rails app root as cwd when running Rails/Bundler commands without an explicit cwd
     try:
@@ -1264,6 +1335,55 @@ async def sandbox_run(
             command = f"( [ -f Gemfile ] || [ -f ./Gemfile ] ) && bundle exec {command} || {command}"
     except Exception:
         pass
+
+    # Heuristics: if this looks like a Go task, ensure Go toolchain is present
+    if auto_go_ensure and uses_go:
+        go_install_sh = (
+            "if ! command -v go >/dev/null 2>&1; then "
+            "dnf install -y golang git || exit 1; "
+            "fi; go version || exit 1;"
+        )
+        go_install_cmd = await sandbox.run_command_detached(
+            "bash",
+            ["-lc", f"{cd_prefix}{go_install_sh}"],
+            env=full_env or None,
+            sudo=True,
+        )
+        try:
+            async for line in go_install_cmd.logs():
+                if stream_logs:
+                    ctx.context.events.append(
+                        {
+                            "phase": "log",
+                            "tool_id": tool_id,
+                            "name": "sandbox_run",
+                            "data": line.data,
+                        }
+                    )
+        except Exception:
+            pass
+        _ = await go_install_cmd.wait()
+
+    # Auto infer ready patterns and port for common Go runs
+    is_go_run = uses_go and (" go run" in f" {cmd_lower}" or cmd_lower.startswith("go run"))
+    if auto_ready_patterns and (not ready_patterns or len(ready_patterns) == 0) and is_go_run:
+        ready_patterns = [
+            "Listening on",
+            "http://0.0.0.0:",
+            "listening on :",
+            "Server started",
+            "Serving on",
+        ]
+    if (port is None) and is_go_run:
+        try:
+            import re as _re
+            m = _re.search(r"--port\\s+(\\d+)|-p\\s+(\\d+)", command)
+            if m:
+                port = int(m.group(1) or m.group(2))
+            else:
+                port = 3000
+        except Exception:
+            port = 3000
 
     # Auto infer ready patterns and port for uvicorn if not supplied
     if auto_ready_patterns and (not ready_patterns or len(ready_patterns) == 0) and ("uvicorn" in cmd_lower):

@@ -28,7 +28,8 @@ Server run checklist (APIs/frontends/servers)
    - Python: bind 0.0.0.0 and set port (e.g., uvicorn --host 0.0.0.0 --port 8000).
    - Node: ensure server binds 0.0.0.0; pass -p/--port if applicable (e.g., next/vite/dev servers).
    - Sinatra: RACK_ENV=production bundle exec rackup -s webrick -o 0.0.0.0 -p <port>.
-   - Rails: ALLOWED_HOST=<sandbox-hostname> bundle exec rails server -b 0.0.0.0 -p 3000.
+   - Rails: Prefer bundler. If bin/rails is non-executable in a fresh checkout, use `bundle exec rails` instead of invoking the binstub directly. Start with: `ALLOWED_HOST=<sandbox-hostname> bundle exec rails server -b 0.0.0.0 -p 3000`.
+   - Go: Prefer creating the sandbox with `runtime: go` so the Go toolchain is preinstalled. Use modules (`go mod init`, `go get`) and start with `go run .`. Ensure your Go server listens on 0.0.0.0. Default to port 3000 when unspecified.
 5) Wait: Stream logs until a ready pattern appears; compute preview URL from the port.
 6) Health check: curl the preview URL first (e.g., / or a health path). If non-2xx, also curl http://127.0.0.1:<port>/ to diagnose; include results.
 7) Preview: Only after a successful preview curl, call sandbox_show_preview(url, port, label).
@@ -47,6 +48,8 @@ Common readiness patterns and default ports
   - next dev: patterns ["Local:", "started server on"], default port 3000
   - vite dev: patterns ["Local:", "ready in"], default port 5173
   - create-react-app (react-scripts start): patterns ["Starting the development server", "Compiled successfully", "You can now view", "Local:"], default port 3000
+ - Go
+  - go run/build: patterns ["Listening on", "http://0.0.0.0:", "listening on :", "Server started", "Serving on"], default port 3000
 - Ruby
   - rackup/puma/sinatra: patterns ["Listening on", "WEBrick::HTTPServer#start", "Sinatra has taken the stage", "tcp://0.0.0.0:"]. Defaults: rackup 9292; sinatra via ruby app.rb 4567.
   - IMPORTANT: When using "bundle exec ruby app.rb", auto-detection may NOT trigger. You must pass ready_patterns explicitly (e.g., the list above) and the expected port (commonly 4567) so the run waits until ready.
@@ -54,6 +57,7 @@ Common readiness patterns and default ports
   - Rails (framework-specific guidance):
     - Create sandbox with runtime `ruby3.3` to bootstrap Ruby and Bundler. Then ensure Rails is installed: run `gem install --no-document rails`.
     - Generate the app: `rails new <app_name> --database=sqlite3 --skip-asset-pipeline --skip-javascript --skip-hotwire --skip-jbuilder --skip-action-mailbox --skip-jobs --skip-action-mailer --skip-action-text --skip-active-storage --skip-action-cable --skip-system-test --skip-github --skip-kamal --force`.
+    - If the template excludes sprockets, do not set `config.assets.*` in environment configs unless sprockets is added.
     - Make sure you create the most minimal app version possible without having it generate stuff you will not use, for example github, kamal, action mailer unless you actually want to send emails, etc.
     - In the app directory, set Bundler path: `bundle config set --local path vendor/bundle`, then `bundle install`.
     - Host allowlist: create `config/initializers/allow_hosts.rb` that (1) appends `ENV['ALLOWED_HOST']` when present, and (2) always allows sandbox proxy domains via regex: add `/.+\.vercel\.run/` and `/.+\.sbox\.bio/` to `Rails.application.config.hosts`. Optionally allow `localhost` and `127.0.0.1` for local curls.

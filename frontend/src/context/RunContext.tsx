@@ -8,6 +8,7 @@ interface RunContextValue {
   addAction: (runId: string, action: Action) => void;
   updateAction: (runId: string, actionId: string, updater: (prev: Action | undefined) => Action) => void;
   appendActionLog: (runId: string, actionId: string, line: string) => void;
+  clearProjectRuns: (projectId: string) => void;
 }
 
 const RunContext = React.createContext<RunContextValue | undefined>(undefined);
@@ -77,6 +78,20 @@ function runReducer(state: RunState, action: { type: string; payload: unknown })
       updatedActions[idx] = updated;
       return { runs: { ...state.runs, [runId]: { ...existingRun, actions: updatedActions } }, order: state.order };
     }
+    case 'clearProject': {
+      const { projectId } = action.payload as { projectId: string };
+      const newRuns: Record<string, Run> = {};
+      const newOrder: string[] = [];
+      for (const id of state.order) {
+        const r = state.runs[id];
+        if (!r) continue;
+        if (r.projectId !== projectId) {
+          newRuns[id] = r;
+          newOrder.push(id);
+        }
+      }
+      return { runs: newRuns, order: newOrder };
+    }
     default:
       return state;
   }
@@ -108,7 +123,11 @@ export const RunProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     dispatch({ type: 'appendActionLog', payload: { runId, actionId, line } });
   }, []);
 
-  const value = React.useMemo<RunContextValue>(() => ({ runs: state.runs, runOrder: state.order, createRun, addAction, updateAction, appendActionLog }), [state, createRun, addAction, updateAction, appendActionLog]);
+  const clearProjectRuns = React.useCallback((projectId: string) => {
+    dispatch({ type: 'clearProject', payload: { projectId } });
+  }, []);
+
+  const value = React.useMemo<RunContextValue>(() => ({ runs: state.runs, runOrder: state.order, createRun, addAction, updateAction, appendActionLog, clearProjectRuns }), [state, createRun, addAction, updateAction, appendActionLog, clearProjectRuns]);
 
   return <RunContext.Provider value={value}>{children}</RunContext.Provider>;
 };

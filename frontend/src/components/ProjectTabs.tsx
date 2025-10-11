@@ -140,13 +140,13 @@ const ProjectTabs: React.FC<ProjectTabsProps> = ({ projects, activeProjectId, on
         <button
           type="button"
           onClick={onAdd}
-          className="inline-flex items-center gap-1 px-2 py-1 text-sm rounded"
+          className="inline-flex items-center gap-1 px-2 py-1 text-sm rounded cursor-pointer"
           style={{ background: 'var(--vscode-surface)', color: 'var(--vscode-text)', border: '1px solid var(--vscode-panel-border)' }}
           title="New project"
           aria-label="New project"
         >
           <Plus className="w-4 h-4" />
-          <span>New</span>
+          <span>New Project</span>
         </button>
       </div>
     </div>
@@ -154,5 +154,3 @@ const ProjectTabs: React.FC<ProjectTabsProps> = ({ projects, activeProjectId, on
 };
 
 export default ProjectTabs;
-
-

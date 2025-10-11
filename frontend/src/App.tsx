@@ -20,6 +20,7 @@ import AccountMenu from './components/AccountMenu';
 import { CodeFixModal } from './components/CodeFixModal';
 import ProjectTabs, { type ProjectTab } from './components/ProjectTabs';
 import NewProjectModal from './components/NewProjectModal';
+import { getTemplateById, TEMPLATES } from './templates/index';
 
 type ResizableCenterProps = {
   code: string;
@@ -125,112 +126,7 @@ const ResizableCenter: React.FC<ResizableCenterProps> = ({ code, setCode, propos
   );
 };
 
-const STARTER_PROJECT: Record<string, string> = {
-  'main.py': `from fastapi import FastAPI
-from routes import api_router
-
-app = FastAPI(title="Demo API")
-
-@app.get("/")
-def root():
-    return {"message": "Hello from FastAPI"}
-
-app.include_router(api_router)
-
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
-`,
-  'routes/__init__.py': `from fastapi import APIRouter
-from .items import router as items_router
-from .users import router as users_router
-
-api_router = APIRouter()
-api_router.include_router(items_router, prefix="/items", tags=["items"])
-api_router.include_router(users_router, prefix="/users", tags=["users"])
-`,
-  'routes/items.py': `from typing import List, Optional
-
-from fastapi import APIRouter, HTTPException, Query
-from pydantic import BaseModel
-
-
-class Item(BaseModel):
-    id: int
-    name: str
-    price: float
-    description: Optional[str] = None
-
-
-router = APIRouter()
-
-# Sample, read-only data suitable for stateless/serverless deployments
-SAMPLE_ITEMS: List[Item] = [
-    Item(id=1, name="Widget", price=9.99, description="A simple widget"),
-    Item(id=2, name="Gadget", price=19.99, description="A useful gadget"),
-    Item(id=3, name="Doohickey", price=4.50),
-]
-
-
-@router.get("/", response_model=List[Item])
-def list_items(q: Optional[str] = Query(default=None)) -> List[Item]:
-    items = SAMPLE_ITEMS
-    if q:
-        query = q.lower()
-        return [i for i in items if query in i.name.lower()]
-    return items
-
-
-@router.get("/{item_id}", response_model=Item)
-def get_item(item_id: int) -> Item:
-    for item in SAMPLE_ITEMS:
-        if item.id == item_id:
-            return item
-    raise HTTPException(status_code=404, detail="Item not found")
-`,
-  'routes/users.py': `from typing import List, Optional
-
-from fastapi import APIRouter, HTTPException, Query
-from pydantic import BaseModel
-
-
-class User(BaseModel):
-    id: int
-    username: str
-    full_name: Optional[str] = None
-
-
-router = APIRouter()
-
-_users: List[User] = [
-    User(id=1, username="alice", full_name="Alice Anderson"),
-    User(id=2, username="bob", full_name="Bob Brown"),
-]
-
-
-@router.get("/me", response_model=User)
-def read_me() -> User:
-    return _users[0]
-
-
-@router.get("/", response_model=List[User])
-def list_users(limit: int = Query(default=50, ge=1, le=100)) -> List[User]:
-    return _users[:limit]
-
-
-@router.get("/{user_id}", response_model=User)
-def get_user(user_id: int) -> User:
-    for user in _users:
-        if user.id == user_id:
-            return user
-    raise HTTPException(status_code=404, detail="User not found")
-`,
-  'requirements.txt': `fastapi==0.115.12
-uvicorn[standard]==0.34.2
-pydantic>=2
-`,
-  'README.md': `# Python in Vercel sandboxes in Python on Vercel (crazy)\n\nGo to 'main.py' and click the 'run' button at the top right.\n`,
-};
+// Default template contents moved to templates.ts
 
 // Generate a unique user ID for this session
 const USER_ID = `user_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
@@ -256,10 +152,44 @@ function App() {
   const play = usePlay();
   const { isAuthenticated, user, openModal } = useAuth();
 
+  // Persisted state (projects + code) storage
+  type PersistedProjectState = {
+    files: Record<string, string>;
+    activeFile: string;
+    folders?: string[];
+    expandedFolders?: string[];
+    model?: string;
+  };
+  type PersistedState = {
+    projects: ProjectTab[];
+    activeProjectId: string;
+    projectStates: Record<string, PersistedProjectState>;
+    version?: number;
+  };
+  const STORAGE_KEY = 'nfca_state_v1';
+  const persisted = React.useMemo<PersistedState | null>(() => {
+    if (typeof window === 'undefined') return null;
+    try {
+      const raw = localStorage.getItem(STORAGE_KEY);
+      if (!raw) return null;
+      const parsed = JSON.parse(raw) as PersistedState;
+      if (!parsed || !Array.isArray(parsed.projects) || typeof parsed.activeProjectId !== 'string' || typeof parsed.projectStates !== 'object') {
+        return null;
+      }
+      return parsed;
+    } catch {
+      return null;
+    }
+  }, []);
+
   // Multi-project state
-  const initialProjectId = React.useMemo(() => `proj_${Date.now().toString(36)}_${Math.random().toString(36).slice(2,7)}`, []);
-  const [projects, setProjects] = useState<ProjectTab[]>([{ id: initialProjectId, name: 'Project 1' }]);
-  const [activeProjectId, setActiveProjectId] = useState<string>(initialProjectId);
+  const initialProjectId = React.useMemo(() => (persisted?.activeProjectId || `proj_${Date.now().toString(36)}_${Math.random().toString(36).slice(2,7)}`), [persisted]);
+  const [projects, setProjects] = useState<ProjectTab[]>(() => (persisted?.projects?.length ? persisted.projects : [{ id: initialProjectId, name: 'Project 1' }]));
+  const [activeProjectId, setActiveProjectId] = useState<string>(() => {
+    const candidate = persisted?.activeProjectId || initialProjectId;
+    const exists = (persisted?.projects || [{ id: initialProjectId, name: 'Project 1' }]).some(p => p.id === candidate);
+    return exists ? candidate : (persisted?.projects?.[0]?.id || initialProjectId);
+  });
   const [showNewProject, setShowNewProject] = useState<boolean>(false);
 
   type ProjectState = {
@@ -276,23 +206,112 @@ function App() {
     codeFix: { fileName: string; startLine: number; endLine: number; selectedCode: string } | null;
   };
 
-  const [projectStates, setProjectStates] = useState<Record<string, ProjectState>>(() => ({
-    [initialProjectId]: {
-      files: STARTER_PROJECT,
-      proposals: {},
-      activeFile: 'main.py',
-      folders: undefined,
-      expandedFolders: [],
-      input: '',
-      loading: false,
-      currentTaskId: null,
-      cancelling: false,
-      model: 'anthropic/claude-sonnet-4.5',
-      codeFix: null,
-    },
-  }));
+  const defaultTemplateId = 'fastapi';
+  const defaultTemplate = getTemplateById(defaultTemplateId) || TEMPLATES[0];
+  const [projectStates, setProjectStates] = useState<Record<string, ProjectState>>(() => {
+    if (persisted?.projectStates && Object.keys(persisted.projectStates).length) {
+      const out: Record<string, ProjectState> = {};
+      for (const [id, s] of Object.entries(persisted.projectStates)) {
+        const files = (s && s.files) ? s.files : (defaultTemplate.files);
+        let activeFile = s?.activeFile;
+        if (!activeFile || !(activeFile in files)) {
+          const first = Object.keys(files)[0];
+          activeFile = first || defaultTemplate.defaultActiveFile;
+        }
+        out[id] = {
+          files,
+          proposals: {},
+          activeFile,
+          folders: s?.folders,
+          expandedFolders: Array.isArray(s?.expandedFolders) ? (s?.expandedFolders as string[]) : [],
+          input: '',
+          loading: false,
+          currentTaskId: null,
+          cancelling: false,
+          model: s?.model || 'anthropic/claude-sonnet-4.5',
+          codeFix: null,
+        };
+      }
+      // Ensure every project has a state
+      for (const p of (persisted?.projects || [])) {
+        if (!out[p.id]) {
+          out[p.id] = {
+            files: defaultTemplate.files,
+            proposals: {},
+            activeFile: defaultTemplate.defaultActiveFile,
+            folders: undefined,
+            expandedFolders: [],
+            input: '',
+            loading: false,
+            currentTaskId: null,
+            cancelling: false,
+            model: 'anthropic/claude-sonnet-4.5',
+            codeFix: null,
+          };
+        }
+      }
+      return out;
+    }
+    return {
+      [initialProjectId]: {
+        files: defaultTemplate.files,
+        proposals: {},
+        activeFile: defaultTemplate.defaultActiveFile,
+        folders: undefined,
+        expandedFolders: [],
+        input: '',
+        loading: false,
+        currentTaskId: null,
+        cancelling: false,
+        model: 'anthropic/claude-sonnet-4.5',
+        codeFix: null,
+      },
+    } as Record<string, ProjectState>;
+  });
 
-  const activeState = projectStates[activeProjectId];
+  // Save to localStorage whenever projects or code change
+  React.useEffect(() => {
+    if (typeof window === 'undefined') return;
+    try {
+      // Only persist essential, non-ephemeral fields
+      const projectStatesToPersist: Record<string, PersistedProjectState> = {};
+      for (const [id, st] of Object.entries(projectStates)) {
+        projectStatesToPersist[id] = {
+          files: st.files,
+          activeFile: st.activeFile,
+          folders: st.folders,
+          expandedFolders: st.expandedFolders,
+          model: st.model,
+        };
+      }
+      const activeIdSafe = projects.some(p => p.id === activeProjectId) ? activeProjectId : (projects[0]?.id || '');
+      const toSave: PersistedState = {
+        version: 1,
+        projects,
+        activeProjectId: activeIdSafe,
+        projectStates: projectStatesToPersist,
+      };
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(toSave));
+    } catch {
+      // ignore quota or serialization errors
+    }
+  }, [projects, activeProjectId, projectStates]);
+
+  // Empty projects state flag (used for conditional rendering)
+  const isNoProjects = projects.length === 0;
+  const activeState = projectStates[activeProjectId] || ({
+    files: {},
+    proposals: {},
+    activeFile: '',
+    folders: undefined,
+    expandedFolders: [],
+    input: '',
+    loading: false,
+    currentTaskId: null,
+    cancelling: false,
+    model: 'anthropic/claude-sonnet-4.5',
+    codeFix: null,
+  } as ProjectState);
   const project = activeState.files;
   const proposals = activeState.proposals;
   const activeFile = activeState.activeFile;
@@ -330,15 +349,15 @@ function App() {
   const setInput = React.useCallback((next: string) => {
     setProjectStates(prev => ({ ...prev, [activeProjectId]: { ...prev[activeProjectId], input: next } }));
   }, [activeProjectId]);
-  const setLoading = (next: boolean) => {
+  const setLoading = React.useCallback((next: boolean) => {
     setProjectStates(prev => ({ ...prev, [activeProjectId]: { ...prev[activeProjectId], loading: next } }));
-  };
-  const setCurrentTaskId = (next: string | null) => {
+  }, [activeProjectId]);
+  const setCurrentTaskId = React.useCallback((next: string | null) => {
     setProjectStates(prev => ({ ...prev, [activeProjectId]: { ...prev[activeProjectId], currentTaskId: next } }));
-  };
-  const setCancelling = (next: boolean) => {
+  }, [activeProjectId]);
+  const setCancelling = React.useCallback((next: boolean) => {
     setProjectStates(prev => ({ ...prev, [activeProjectId]: { ...prev[activeProjectId], cancelling: next } }));
-  };
+  }, [activeProjectId]);
   const setModel = (next: string) => {
     setProjectStates(prev => ({ ...prev, [activeProjectId]: { ...prev[activeProjectId], model: next } }));
   };
@@ -376,7 +395,7 @@ function App() {
   // Deprecated with ThreePane; retained conceptually for potential future use
 
   // Runs context
-  const { runs, runOrder, updateAction } = useRuns();
+  const { runs, runOrder, updateAction, clearProjectRuns } = useRuns();
   // Code-fix modal state
   // codeFix scoped per project
 
@@ -677,6 +696,17 @@ function App() {
     }
   };
 
+  const handleNewChat = React.useCallback(() => {
+    if (currentTaskId && !cancelling) {
+      cancelCurrentTask();
+    }
+    clearProjectRuns(activeProjectId);
+    setInput('');
+    setLoading(false);
+    setCurrentTaskId(null);
+    setCancelling(false);
+  }, [currentTaskId, cancelling, cancelCurrentTask, clearProjectRuns, activeProjectId, setInput, setLoading, setCurrentTaskId, setCancelling]);
+
   // When sandbox run completes after an approved exec request, resume the agent with logs
   React.useEffect(() => {
     if (!pendingExecResume) return;
@@ -801,13 +831,17 @@ function App() {
             }}
             onDelete={(id) => {
               if (!window.confirm('Delete this project? This cannot be undone in this session.')) return;
+              const wasLast = projects.length === 1 && projects[0]?.id === id;
               setProjects(prev => prev.filter(p => p.id !== id));
               setProjectStates(prev => {
                 const next = { ...prev } as Record<string, ProjectState>;
                 delete next[id];
                 return next;
               });
-              if (activeProjectId === id) {
+              if (wasLast) {
+                setActiveProjectId('');
+                setShowNewProject(true);
+              } else if (activeProjectId === id) {
                 const remaining = projects.filter(p => p.id !== id);
                 const nextActive = remaining[0]?.id;
                 if (nextActive) setActiveProjectId(nextActive);
@@ -816,247 +850,279 @@ function App() {
           />
         )}
       left={(
-        <FileTree
-          project={projectForTree}
-          activeFile={activeFile}
-          onSelect={setActiveFile}
-          onCreateFile={(name) => {
-            setProject(prev => ({ ...prev, [name]: '' }));
-            setActiveFile(name);
-          }}
-          onCreateFolder={(folderPath) => {
-            // Keep a folders list in component state via proposals map using a sentinel key
-            setProject(prev => ({ ...prev })); // no-op to trigger rebuild; folders tracked separately below
-            setFolders(prev => Array.from(new Set([...(prev || []), folderPath.replace(/^\//,'')] )));
-          }}
-          onRename={(oldPath, newPath) => {
-            setProject(prev => {
-              const content = prev[oldPath] ?? '';
-              const next = { ...prev };
-              delete next[oldPath];
-              next[newPath] = content;
-              return next;
-            });
-            if (activeFile === oldPath) setActiveFile(newPath);
-          }}
-          onDelete={(path) => {
-            setProject(prev => {
-              const next = { ...prev };
-              delete next[path];
-              return next;
-            });
-            if (activeFile === path) {
-              const remaining = Object.keys(project).filter(p => p !== path).sort();
-              setActiveFile(remaining[0] || '');
-            }
-          }}
-          onMoveFile={(src, destDir) => {
-            const fileName = src.split('/').pop() || src;
-            const dest = destDir ? `${destDir.replace(/\/$/,'')}/${fileName}` : fileName;
-            if (dest === src) return;
-            setProject(prev => {
-              const content = prev[src];
-              const next = { ...prev };
-              delete next[src];
-              next[dest] = content ?? '';
-              return next;
-            });
-            if (proposals[src]) {
-              setProposals(prev => {
+        isNoProjects ? (
+          <div className="p-4 text-sm" style={{ color: 'var(--vscode-muted)' }}>
+            No project. Create a new one to get started.
+          </div>
+        ) : (
+          <FileTree
+            project={projectForTree}
+            activeFile={activeFile}
+            onSelect={setActiveFile}
+            onCreateFile={(name) => {
+              setProject(prev => ({ ...prev, [name]: '' }));
+              setActiveFile(name);
+            }}
+            onCreateFolder={(folderPath) => {
+              // Keep a folders list in component state via proposals map using a sentinel key
+              setProject(prev => ({ ...prev })); // no-op to trigger rebuild; folders tracked separately below
+              setFolders(prev => Array.from(new Set([...(prev || []), folderPath.replace(/^\//,'')] )));
+            }}
+            onRename={(oldPath, newPath) => {
+              setProject(prev => {
+                const content = prev[oldPath] ?? '';
                 const next = { ...prev };
-                const val = next[src];
-                delete next[src];
-                next[dest] = val;
+                delete next[oldPath];
+                next[newPath] = content;
                 return next;
               });
-            }
-            if (activeFile === src) setActiveFile(dest);
-          }}
-          onMoveFolder={(srcFolder, destDir) => {
-            const normalizedSrc = srcFolder.replace(/\/$/,'');
-            const dest = destDir ? destDir.replace(/\/$/,'') : '';
-            if (dest === normalizedSrc || dest.startsWith(normalizedSrc + '/')) return; // prevent moving into self/child
-            const srcBase = (normalizedSrc.split('/').pop() || normalizedSrc).replace(/^\//,'');
-            const targetBase = dest ? `${dest}/${srcBase}` : srcBase;
-            setProject(prev => {
-              const next: Record<string,string> = {};
-              for (const [p, c] of Object.entries(prev)) {
-                if (p === normalizedSrc || p.startsWith(normalizedSrc + '/')) {
-                  const suffix = p.slice(normalizedSrc.length);
-                  const np = `${targetBase}${suffix}`.replace(/^\//,'');
-                  next[np] = c;
-                } else {
-                  next[p] = c;
-                }
-              }
-              return next;
-            });
-            setProposals(prev => {
-              const next: Record<string,string> = {};
-              for (const [p, c] of Object.entries(prev)) {
-                if (p === normalizedSrc || p.startsWith(normalizedSrc + '/')) {
-                  const suffix = p.slice(normalizedSrc.length);
-                  const np = `${targetBase}${suffix}`.replace(/^\//,'');
-                  next[np] = c;
-                } else {
-                  next[p] = c;
-                }
-              }
-              return next;
-            });
-            setFolders(prev => {
-              const base = prev || [];
-              // Move folder and all its subfolders under dest, preserving the folder basename
-              const moved = base.map(f => {
-                if (f === normalizedSrc || f.startsWith(normalizedSrc + '/')) {
-                  const suffix = f.slice(normalizedSrc.length);
-                  return `${targetBase}${suffix}`.replace(/^\//,'');
-                }
-                return f;
+              if (activeFile === oldPath) setActiveFile(newPath);
+            }}
+            onDelete={(path) => {
+              setProject(prev => {
+                const next = { ...prev };
+                delete next[path];
+                return next;
               });
-              if (!moved.includes(targetBase)) moved.push(targetBase);
-              return Array.from(new Set(moved.map(s => s.replace(/^\//,''))));
-            });
-            if (activeFile === normalizedSrc || activeFile.startsWith(normalizedSrc + '/')) {
-              const suffix = activeFile.slice(normalizedSrc.length);
-              setActiveFile(`${targetBase}${suffix}`.replace(/^\//,''));
-            }
-          }}
-          proposed={proposalsForTree}
-          folders={folders}
-            expandedPaths={expandedFolders}
-            onExpandedChange={setExpandedFolders}
-          onRenameFolder={(oldPath, newPath) => {
-            const normalizedOld = oldPath.replace(/\/$/,'');
-            const normalizedNew = newPath.replace(/^\//,'');
-            // Move files under folder
-            setProject(prev => {
-              const next: Record<string,string> = {};
-              for (const [p, c] of Object.entries(prev)) {
-                if (p === normalizedOld || p.startsWith(normalizedOld + '/')) {
-                  const suffix = p.slice(normalizedOld.length);
-                  const np = (normalizedNew + suffix).replace(/^\//,'');
-                  next[np] = c;
-                } else {
+              if (activeFile === path) {
+                const remaining = Object.keys(project).filter(p => p !== path).sort();
+                setActiveFile(remaining[0] || '');
+              }
+            }}
+            onMoveFile={(src, destDir) => {
+              const fileName = src.split('/').pop() || src;
+              const dest = destDir ? `${destDir.replace(/\/$/,'')}/${fileName}` : fileName;
+              if (dest === src) return;
+              setProject(prev => {
+                const content = prev[src];
+                const next = { ...prev };
+                delete next[src];
+                next[dest] = content ?? '';
+                return next;
+              });
+              if (proposals[src]) {
+                setProposals(prev => {
+                  const next = { ...prev };
+                  const val = next[src];
+                  delete next[src];
+                  next[dest] = val;
+                  return next;
+                });
+              }
+              if (activeFile === src) setActiveFile(dest);
+            }}
+            onMoveFolder={(srcFolder, destDir) => {
+              const normalizedSrc = srcFolder.replace(/\/$/,'');
+              const dest = destDir ? destDir.replace(/\/$/,'') : '';
+              if (dest === normalizedSrc || dest.startsWith(normalizedSrc + '/')) return; // prevent moving into self/child
+              const srcBase = (normalizedSrc.split('/').pop() || normalizedSrc).replace(/^\//,'');
+              const targetBase = dest ? `${dest}/${srcBase}` : srcBase;
+              setProject(prev => {
+                const next: Record<string,string> = {};
+                for (const [p, c] of Object.entries(prev)) {
+                  if (p === normalizedSrc || p.startsWith(normalizedSrc + '/')) {
+                    const suffix = p.slice(normalizedSrc.length);
+                    const np = `${targetBase}${suffix}`.replace(/^\//,'');
+                    next[np] = c;
+                  } else {
+                    next[p] = c;
+                  }
+                }
+                return next;
+              });
+              setProposals(prev => {
+                const next: Record<string,string> = {};
+                for (const [p, c] of Object.entries(prev)) {
+                  if (p === normalizedSrc || p.startsWith(normalizedSrc + '/')) {
+                    const suffix = p.slice(normalizedSrc.length);
+                    const np = `${targetBase}${suffix}`.replace(/^\//,'');
+                    next[np] = c;
+                  } else {
+                    next[p] = c;
+                  }
+                }
+                return next;
+              });
+              setFolders(prev => {
+                const base = prev || [];
+                // Move folder and all its subfolders under dest, preserving the folder basename
+                const moved = base.map(f => {
+                  if (f === normalizedSrc || f.startsWith(normalizedSrc + '/')) {
+                    const suffix = f.slice(normalizedSrc.length);
+                    return `${targetBase}${suffix}`.replace(/^\//,'');
+                  }
+                  return f;
+                });
+                if (!moved.includes(targetBase)) moved.push(targetBase);
+                return Array.from(new Set(moved.map(s => s.replace(/^\//,''))));
+              });
+              if (activeFile === normalizedSrc || activeFile.startsWith(normalizedSrc + '/')) {
+                const suffix = activeFile.slice(normalizedSrc.length);
+                setActiveFile(`${targetBase}${suffix}`.replace(/^\//,''));
+              }
+            }}
+            proposed={proposalsForTree}
+            folders={folders}
+              expandedPaths={expandedFolders}
+              onExpandedChange={setExpandedFolders}
+            onRenameFolder={(oldPath, newPath) => {
+              const normalizedOld = oldPath.replace(/\/$/,'');
+              const normalizedNew = newPath.replace(/^\//,'');
+              // Move files under folder
+              setProject(prev => {
+                const next: Record<string,string> = {};
+                for (const [p, c] of Object.entries(prev)) {
+                  if (p === normalizedOld || p.startsWith(normalizedOld + '/')) {
+                    const suffix = p.slice(normalizedOld.length);
+                    const np = (normalizedNew + suffix).replace(/^\//,'');
+                    next[np] = c;
+                  } else {
+                    next[p] = c;
+                  }
+                }
+                return next;
+              });
+              // Proposals under folder
+              setProposals(prev => {
+                const next: Record<string,string> = {};
+                for (const [p, c] of Object.entries(prev)) {
+                  if (p === normalizedOld || p.startsWith(normalizedOld + '/')) {
+                    const suffix = p.slice(normalizedOld.length);
+                    const np = (normalizedNew + suffix).replace(/^\//,'');
+                    next[np] = c;
+                  } else {
+                    next[p] = c;
+                  }
+                }
+                return next;
+              });
+              // Folders list
+              setFolders(prev => {
+                const base = prev || [];
+                const updated = base.map(f => (f === normalizedOld || f.startsWith(normalizedOld + '/') ? (normalizedNew + f.slice(normalizedOld.length)).replace(/^\//,'') : f));
+                if (!updated.includes(normalizedNew)) updated.push(normalizedNew);
+                return Array.from(new Set(updated));
+              });
+              // Active file path update
+              if (activeFile === normalizedOld || activeFile.startsWith(normalizedOld + '/')) {
+                const suffix = activeFile.slice(normalizedOld.length);
+                setActiveFile((normalizedNew + suffix).replace(/^\//,''));
+              }
+            }}
+            onDeleteFolder={(folderPath) => {
+              const normalized = folderPath.replace(/\/$/,'');
+              setProject(prev => {
+                const next: Record<string,string> = {};
+                for (const [p, c] of Object.entries(prev)) {
+                  if (p === normalized || p.startsWith(normalized + '/')) continue;
                   next[p] = c;
                 }
-              }
-              return next;
-            });
-            // Proposals under folder
-            setProposals(prev => {
-              const next: Record<string,string> = {};
-              for (const [p, c] of Object.entries(prev)) {
-                if (p === normalizedOld || p.startsWith(normalizedOld + '/')) {
-                  const suffix = p.slice(normalizedOld.length);
-                  const np = (normalizedNew + suffix).replace(/^\//,'');
-                  next[np] = c;
-                } else {
+                return next;
+              });
+              setProposals(prev => {
+                const next: Record<string,string> = {};
+                for (const [p, c] of Object.entries(prev)) {
+                  if (p === normalized || p.startsWith(normalized + '/')) continue;
                   next[p] = c;
                 }
+                return next;
+              });
+              setFolders(prev => (prev || []).filter(f => f !== normalized && !f.startsWith(normalized + '/')));
+              if (activeFile === normalized || activeFile.startsWith(normalized + '/')) {
+                const remaining = Object.keys(project).filter(p => !(p === normalized || p.startsWith(normalized + '/'))).sort();
+                setActiveFile(remaining[0] || '');
               }
-              return next;
-            });
-            // Folders list
-            setFolders(prev => {
-              const base = prev || [];
-              const updated = base.map(f => (f === normalizedOld || f.startsWith(normalizedOld + '/') ? (normalizedNew + f.slice(normalizedOld.length)).replace(/^\//,'') : f));
-              if (!updated.includes(normalizedNew)) updated.push(normalizedNew);
-              return Array.from(new Set(updated));
-            });
-            // Active file path update
-            if (activeFile === normalizedOld || activeFile.startsWith(normalizedOld + '/')) {
-              const suffix = activeFile.slice(normalizedOld.length);
-              setActiveFile((normalizedNew + suffix).replace(/^\//,''));
-            }
-          }}
-          onDeleteFolder={(folderPath) => {
-            const normalized = folderPath.replace(/\/$/,'');
-            setProject(prev => {
-              const next: Record<string,string> = {};
-              for (const [p, c] of Object.entries(prev)) {
-                if (p === normalized || p.startsWith(normalized + '/')) continue;
-                next[p] = c;
-              }
-              return next;
-            });
-            setProposals(prev => {
-              const next: Record<string,string> = {};
-              for (const [p, c] of Object.entries(prev)) {
-                if (p === normalized || p.startsWith(normalized + '/')) continue;
-                next[p] = c;
-              }
-              return next;
-            });
-            setFolders(prev => (prev || []).filter(f => f !== normalized && !f.startsWith(normalized + '/')));
-            if (activeFile === normalized || activeFile.startsWith(normalized + '/')) {
-              const remaining = Object.keys(project).filter(p => !(p === normalized || p.startsWith(normalized + '/'))).sort();
-              setActiveFile(remaining[0] || '');
-            }
-          }}
-        />
+            }}
+          />
+        )
       )}
       center={(
-        <ResizableCenter
-          code={code}
-          setCode={setCode}
-          proposals={proposals}
-          clearProposal={clearProposal}
-          activeFile={activeFile}
-          onRun={handleRun}
-          running={Boolean(play.sandboxId) && (play.status === 'running' || play.status === 'starting')}
-          onStop={handleStop}
-          previewUrl={play.previewUrl}
-          onOpenPreview={play.openPreview}
-          terminalLogs={play.logs}
-          onClearLogs={play.clear}
-          isIgnored={isPathIgnored}
-        // When editor requests a code fix open modal
-        onRequestCodeFix={openCodeFix}
-        />
+        isNoProjects ? (
+          <div className="flex-1 flex items-center justify-center">
+            <button
+              onClick={() => setShowNewProject(true)}
+              className="px-3 py-1 rounded-sm"
+              style={{ background: 'var(--vscode-accent)', color: '#ffffff', border: '1px solid var(--vscode-panel-border)' }}
+            >
+              Create new project
+            </button>
+          </div>
+        ) : (
+          <ResizableCenter
+            code={code}
+            setCode={setCode}
+            proposals={proposals}
+            clearProposal={clearProposal}
+            activeFile={activeFile}
+            onRun={handleRun}
+            running={Boolean(play.sandboxId) && (play.status === 'running' || play.status === 'starting')}
+            onStop={handleStop}
+            previewUrl={play.previewUrl}
+            onOpenPreview={play.openPreview}
+            terminalLogs={play.logs}
+            onClearLogs={play.clear}
+            isIgnored={isPathIgnored}
+            // When editor requests a code fix open modal
+            onRequestCodeFix={openCodeFix}
+          />
+        )
       )}
       right={(
-        <>
-          <Timeline
-            actions={timelineActions}
-            isEmpty={timelineActions.length === 0}
-            loading={loading || timelineActions.some(a => a.status === 'running')}
-          />
-          <div className="px-4 py-2">
-            <ModelPicker value={model} onChange={setModel} />
-          </div>
-          <ExecRequestPrompt
-            visible={!!pendingExecRequest}
-            executing={executingCode}
-            executionAction={executionAction}
-            onAccept={handleAcceptExecution}
-            onReject={handleRejectExecution}
-          />
-          <ChatInput
-            value={input}
-            onChange={setInput}
-            onSend={handleSendMessage}
-            sendDisabled={loading}
-            showCancel={!!currentTaskId}
-            onCancel={handleCancelTask}
-            cancelling={cancelling}
-            suggestions={
-              timelineActions.length === 0
-                ? [
-                    'Add a FastAPI /todos API with in-memory CRUD (GET, POST, DELETE) and run',
-                    'Implement /math/fibonacci?n=20 that returns the sequence as JSON and run',
-                    'Add request logging middleware plus /health and /time endpoints and run',
-                    'Create a /text/wordcount endpoint that accepts text in JSON and returns counts and run',
-                  ]
-                : undefined
-            }
-          />
-          <div className="px-4 py-2 text-xs text-gray-500">
-            {isAuthenticated ? (
-              <span>Signed in{user?.username ? ` as @${user.username}` : ''}</span>
-            ) : null}
-          </div>
-        </>
+        isNoProjects ? (
+          <div className="p-4 text-sm" style={{ color: 'var(--vscode-muted)' }} />
+        ) : (
+          <>
+            <div className="px-4 py-2" style={{ borderBottom: '1px solid var(--vscode-panel-border)' }}>
+              <button
+                onClick={handleNewChat}
+                className="px-2 py-1 rounded-sm text-xs"
+                style={{ background: 'var(--vscode-surface)', color: 'var(--vscode-text)', border: '1px solid var(--vscode-panel-border)' }}
+                title="Start a new chat"
+              >
+                New Chat
+              </button>
+            </div>
+            <Timeline
+              actions={timelineActions}
+              isEmpty={timelineActions.length === 0}
+              loading={loading || timelineActions.some(a => a.status === 'running')}
+            />
+            <div className="px-4 py-2">
+              <ModelPicker value={model} onChange={setModel} />
+            </div>
+            <ExecRequestPrompt
+              visible={!!pendingExecRequest}
+              executing={executingCode}
+              executionAction={executionAction}
+              onAccept={handleAcceptExecution}
+              onReject={handleRejectExecution}
+            />
+            <ChatInput
+              value={input}
+              onChange={setInput}
+              onSend={handleSendMessage}
+              sendDisabled={loading}
+              showCancel={!!currentTaskId}
+              onCancel={handleCancelTask}
+              cancelling={cancelling}
+              suggestions={
+                timelineActions.length === 0
+                  ? [
+                      'Add a FastAPI /todos API with in-memory CRUD (GET, POST, DELETE) and run',
+                      'Implement /math/fibonacci?n=20 that returns the sequence as JSON and run',
+                      'Add request logging middleware plus /health and /time endpoints and run',
+                      'Create a /text/wordcount endpoint that accepts text in JSON and returns counts and run',
+                    ]
+                  : undefined
+              }
+            />
+            <div className="px-4 py-2 text-xs text-gray-500">
+              {isAuthenticated ? (
+                <span>Signed in{user?.username ? ` as @${user.username}` : ''}</span>
+              ) : null}
+            </div>
+          </>
+        )
       )}
     />
     <AuthModal />
@@ -1064,16 +1130,18 @@ function App() {
     <NewProjectModal
       visible={showNewProject}
       defaultName={nextProjectName}
+      existingNames={projects.map(p => p.name)}
       onClose={() => setShowNewProject(false)}
-      onCreate={(name) => {
+      onCreate={(name, templateId) => {
         const id = `proj_${Date.now().toString(36)}_${Math.random().toString(36).slice(2,7)}`;
         setProjects(prev => [...prev, { id, name }]);
+        const t = getTemplateById(templateId) || defaultTemplate;
         setProjectStates(prev => ({
           ...prev,
           [id]: {
-            files: { 'main.py': STARTER_PROJECT['main.py'], 'requirements.txt': STARTER_PROJECT['requirements.txt'] },
+            files: t.files,
             proposals: {},
-            activeFile: 'main.py',
+            activeFile: t.defaultActiveFile,
             folders: undefined,
             expandedFolders: [],
             input: '',

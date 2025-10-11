@@ -1,29 +1,50 @@
 import React from 'react';
+import { TEMPLATES } from '../templates/index';
 
 type NewProjectModalProps = {
   visible: boolean;
   defaultName: string;
+  existingNames: string[];
   onClose: () => void;
-  onCreate: (name: string) => void;
+  onCreate: (name: string, templateId: string) => void;
 };
 
-export const NewProjectModal: React.FC<NewProjectModalProps> = ({ visible, defaultName, onClose, onCreate }) => {
+export const NewProjectModal: React.FC<NewProjectModalProps> = ({ visible, defaultName, existingNames, onClose, onCreate }) => {
   const [name, setName] = React.useState<string>('');
+  const [templateId, setTemplateId] = React.useState<string>('fastapi');
   const inputRef = React.useRef<HTMLInputElement>(null);
 
   React.useEffect(() => {
     if (visible) {
-      setName(defaultName || '');
+      // Start with an empty value so the input shows only the placeholder suggestion
+      setName('');
+      setTemplateId('fastapi');
       requestAnimationFrame(() => inputRef.current?.focus());
     }
   }, [visible, defaultName]);
+
+  const placeholderName = React.useMemo(() => {
+    const tmpl = TEMPLATES.find(t => t.id === templateId);
+    const base = (tmpl?.label || defaultName || 'Project').trim();
+    const existing = new Set((existingNames || []).map(s => (s || '').trim().toLowerCase()))
+    if (!existing.has(base.toLowerCase())) return base;
+    // Find the next available suffix: base 2, base 3, ...
+    // Stop at a reasonable upper bound to avoid infinite loops in pathological cases
+    for (let i = 2; i < 1000; i += 1) {
+      const candidate = `${base} ${i}`;
+      if (!existing.has(candidate.toLowerCase())) return candidate;
+    }
+    // Fallback if all else fails
+    return `${base} ${Date.now()}`;
+  }, [templateId, existingNames, defaultName]);
 
   if (!visible) return null;
 
   const handleSubmit = () => {
     const trimmed = (name || '').trim();
-    if (!trimmed) return;
-    onCreate(trimmed);
+    const finalName = trimmed || placeholderName;
+    if (!finalName) return;
+    onCreate(finalName, templateId);
   };
 
   return (
@@ -48,10 +69,32 @@ export const NewProjectModal: React.FC<NewProjectModalProps> = ({ visible, defau
             value={name}
             onChange={(e) => setName(e.target.value)}
             onKeyDown={(e) => { if (e.key === 'Enter') handleSubmit(); }}
-            placeholder="My Project"
+            placeholder={placeholderName || 'My Project'}
             className="w-full rounded-sm px-3 py-2"
             style={{ background: 'var(--vscode-contrast)', border: '1px solid var(--vscode-panel-border)', color: 'var(--vscode-text)' }}
           />
+          <div className="mt-2">
+            <label className="text-xs" htmlFor="new-project-template" style={{ color: 'var(--vscode-muted)' }}>Template</label>
+            <div className="mt-1 grid grid-cols-2 gap-2">
+              {TEMPLATES.map(t => (
+                <button
+                  key={t.id}
+                  onClick={() => setTemplateId(t.id)}
+                  className={`text-left p-2 rounded-sm border cursor-pointer ${templateId === t.id ? 'ring-1' : ''}`}
+                  style={{
+                    background: templateId === t.id ? 'var(--vscode-surface)' : 'var(--vscode-contrast)',
+                    borderColor: 'var(--vscode-panel-border)',
+                    color: 'var(--vscode-text)'
+                  }}
+                >
+                  <div className="text-sm font-medium">{t.label}</div>
+                  {t.description ? (
+                    <div className="text-xs" style={{ color: 'var(--vscode-muted)' }}>{t.description}</div>
+                  ) : null}
+                </button>
+              ))}
+            </div>
+          </div>
           <div className="flex items-center justify-end gap-2 pt-2" style={{ borderTop: '1px solid var(--vscode-panel-border)' }}>
             <button
               onClick={onClose}
@@ -62,7 +105,6 @@ export const NewProjectModal: React.FC<NewProjectModalProps> = ({ visible, defau
             </button>
             <button
               onClick={handleSubmit}
-              disabled={!name.trim()}
               className="px-3 py-1 rounded-sm disabled:opacity-50 cursor-pointer"
               style={{ background: 'var(--vscode-accent)', color: '#ffffff' }}
             >

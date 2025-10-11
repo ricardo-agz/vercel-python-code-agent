@@ -1,5 +1,5 @@
 import React from 'react';
-import { MessageSquare, Loader, Box, Code2, Cpu, Gem, ExternalLink } from 'lucide-react';
+import { MessageSquare, Loader, Box, Code2, Cpu, Gem, ExternalLink, Settings } from 'lucide-react';
 import type { Action, ExecResultAction } from '../types/run';
 
 interface TimelineProps {
@@ -179,6 +179,22 @@ export const Timeline: React.FC<TimelineProps> = ({ actions, isEmpty, loading })
                     </div>
                   );
                 }
+              if (action.toolName === 'sandbox_set_env') {
+                const info = (res as unknown as { env_keys?: string[]; name?: string }) || {};
+                const keys = Array.isArray(info.env_keys) ? info.env_keys : [];
+                const shown = keys.slice(0, 3).join(', ');
+                const more = keys.length > 3 ? ` +${keys.length - 3} more` : '';
+                return (
+                  <div key={key} className="flex items-center gap-2 text-xs ml-4" style={{ color: 'var(--vscode-subtle)' }}>
+                    <Settings className="w-3 h-3" />
+                    <span>Set env for</span>
+                    <span className="text-gray-300">{info.name || 'sandbox'}</span>
+                    {keys.length > 0 ? (
+                      <span>({shown}{more})</span>
+                    ) : null}
+                  </div>
+                );
+              }
                 if (typeof res?.new_code !== 'undefined' || typeof res?.new_file_content !== 'undefined') return null;
                 return (
                   <div key={key} className="text-xs" style={{ color: 'var(--vscode-subtle)' }}>Tool {action.toolName} completed</div>

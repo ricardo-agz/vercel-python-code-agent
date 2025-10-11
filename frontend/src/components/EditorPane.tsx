@@ -252,7 +252,9 @@ export const EditorPane: React.FC<EditorPaneProps> = ({
       <div className="flex-1 min-h-0 overflow-hidden relative">
         {proposedContent === null ? (
           <Editor
+            key={fileName}
             height="100%"
+            path={`file:///${fileName}`}
             defaultLanguage={language}
             language={language}
             value={code}
@@ -300,6 +302,48 @@ export const EditorPane: React.FC<EditorPaneProps> = ({
                   'scrollbarSlider.activeBackground': '#2f2f2f',
                 },
               });
+
+              // Configure TypeScript/JavaScript for TSX/JSX awareness
+              try {
+                const ts = m.languages.typescript;
+                ts.typescriptDefaults.setCompilerOptions({
+                  allowJs: true,
+                  allowNonTsExtensions: true,
+                  jsx: ts.JsxEmit.ReactJSX,
+                  jsxFactory: 'React.createElement',
+                  jsxFragmentFactory: 'React.Fragment',
+                  target: ts.ScriptTarget.ES2020,
+                  module: ts.ModuleKind.ESNext,
+                  moduleResolution: ts.ModuleResolutionKind.NodeJs,
+                  lib: ['es2022', 'dom'],
+                  skipLibCheck: true,
+                  noEmit: true,
+                  esModuleInterop: true,
+                  isolatedModules: true,
+                });
+                ts.typescriptDefaults.setDiagnosticsOptions({
+                  noSemanticValidation: true,
+                  noSyntaxValidation: false,
+                });
+                ts.javascriptDefaults.setCompilerOptions({
+                  allowJs: true,
+                  allowNonTsExtensions: true,
+                  // Help JSX in .jsx files
+                  jsx: ts.JsxEmit.ReactJSX,
+                  jsxFactory: 'React.createElement',
+                  jsxFragmentFactory: 'React.Fragment',
+                  target: ts.ScriptTarget.ES2020,
+                  lib: ['es2022', 'dom'],
+                });
+                ts.javascriptDefaults.setDiagnosticsOptions({
+                  noSemanticValidation: true,
+                  noSyntaxValidation: false,
+                });
+                ts.typescriptDefaults.setEagerModelSync(true);
+                ts.javascriptDefaults.setEagerModelSync(true);
+              } catch {
+                // noop
+              }
             }}
             onMount={(editorInstance) => {
               editorRef.current = editorInstance as unknown as monaco.editor.IStandaloneCodeEditor;
@@ -345,9 +389,12 @@ export const EditorPane: React.FC<EditorPaneProps> = ({
           />
         ) : (
           <DiffEditor
+            key={`diff:${fileName}`}
             keepCurrentOriginalModel={true}
             keepCurrentModifiedModel={true}
             height="100%"
+            originalModelPath={`file:///${fileName}.orig`}
+            modifiedModelPath={`file:///${fileName}`}
             original={code}
             modified={proposedContent || code}
             language={language}
@@ -393,6 +440,47 @@ export const EditorPane: React.FC<EditorPaneProps> = ({
                   'scrollbarSlider.activeBackground': '#2f2f2f',
                 },
               });
+
+              // Configure TypeScript/JavaScript for TSX/JSX awareness
+              try {
+                const ts = m.languages.typescript;
+                ts.typescriptDefaults.setCompilerOptions({
+                  allowJs: true,
+                  allowNonTsExtensions: true,
+                  jsx: ts.JsxEmit.ReactJSX,
+                  jsxFactory: 'React.createElement',
+                  jsxFragmentFactory: 'React.Fragment',
+                  target: ts.ScriptTarget.ES2020,
+                  module: ts.ModuleKind.ESNext,
+                  moduleResolution: ts.ModuleResolutionKind.NodeJs,
+                  lib: ['es2022', 'dom'],
+                  skipLibCheck: true,
+                  noEmit: true,
+                  esModuleInterop: true,
+                  isolatedModules: true,
+                });
+                ts.typescriptDefaults.setDiagnosticsOptions({
+                  noSemanticValidation: true,
+                  noSyntaxValidation: false,
+                });
+                ts.javascriptDefaults.setCompilerOptions({
+                  allowJs: true,
+                  allowNonTsExtensions: true,
+                  jsx: ts.JsxEmit.ReactJSX,
+                  jsxFactory: 'React.createElement',
+                  jsxFragmentFactory: 'React.Fragment',
+                  target: ts.ScriptTarget.ES2020,
+                  lib: ['es2022', 'dom'],
+                });
+                ts.javascriptDefaults.setDiagnosticsOptions({
+                  noSemanticValidation: true,
+                  noSyntaxValidation: false,
+                });
+                ts.typescriptDefaults.setEagerModelSync(true);
+                ts.javascriptDefaults.setEagerModelSync(true);
+              } catch {
+                // noop
+              }
             }}
             onMount={(editor) => {
               diffEditorRef.current = editor as unknown as monaco.editor.IStandaloneDiffEditor;
