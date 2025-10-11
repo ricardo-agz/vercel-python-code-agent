@@ -325,8 +325,9 @@ function App() {
   const folders = activeState.folders;
   const expandedFolders = activeState.expandedFolders;
   const input = activeState.input;
-  const loading = activeState.loading;
-  const currentTaskId = activeState.currentTaskId;
+  // legacy mutable loading flag (kept for backward compatibility; UI derives thinking below)
+  // const loading = activeState.loading; // may be removed after full migration
+  const currentTaskId = activeState.currentTaskId; // planned removal; used only by useChat
   const cancelling = activeState.cancelling;
   const model = activeState.model;
   const codeFix = activeState.codeFix;
@@ -430,8 +431,6 @@ function App() {
 
   // Keep a memo of last human message timestamps to avoid flicker (only refresh list when a thread's last human time changes)
   const lastHumanAtByThreadRef = React.useRef<Record<string, string | undefined>>({});
-  // Track last selected thread key to detect thread switches
-  const lastSelectedThreadRef = React.useRef<string>('');
 
   // When project changes, load its threads and merge all into memory (do not clear to avoid dropping active streams)
   React.useEffect(() => {
@@ -532,6 +531,21 @@ function App() {
       .flatMap(run => run.actions || []);
   }, [runOrder, runs, activeProjectId, activeThreadId]);
 
+  // Only show thinking spinner for the latest run in the active thread
+  const threadRunIds = React.useMemo(() => {
+    return runOrder.filter(id => {
+      const r = runs[id];
+      if (!r) return false;
+      if (r.projectId !== activeProjectId) return false;
+      const tid = r.threadId || `${activeProjectId}_default`;
+      return tid === (activeThreadId || `${activeProjectId}_default`);
+    });
+  }, [runOrder, runs, activeProjectId, activeThreadId]);
+
+  const latestRunId = threadRunIds.length > 0 ? threadRunIds[threadRunIds.length - 1] : null;
+
+  // (thinking state derived later after stream is initialized)
+
   // Build an ignore matcher from .agentignore + .gitignore and defaults
   const gitignoreText = project['.gitignore'] || '';
   const agentignoreText = project['.agentignore'] || '';
@@ -624,11 +638,17 @@ function App() {
   }, [proposals, isPathIgnored]);
 
   // Map SSE events to UI actions and create the stream controller
-  const isActiveRun = React.useCallback((taskId: string) => taskId === currentTaskId, [currentTaskId]);
+  const isActiveRun = React.useCallback((taskId: string) => taskId === latestRunId, [latestRunId]);
   const handleAgentEvent = useAgentEvents({
     setLoading,
     setCurrentTaskId,
     setCancelling,
+    setLoadingForProject: (projectId: string, next: boolean) => {
+      setProjectStates(prev => ({ ...prev, [projectId]: { ...(prev[projectId] || activeState), loading: next } }));
+    },
+    setCurrentTaskIdForProject: (projectId: string, next: string | null) => {
+      setProjectStates(prev => ({ ...prev, [projectId]: { ...(prev[projectId] || activeState), currentTaskId: next } }));
+    },
     upsertProposal: (filePath: string, newContent: string) => {
       if (!isPathIgnored(filePath)) upsertProposal(filePath, newContent);
     },
@@ -748,34 +768,20 @@ function App() {
   });
   const stream = useAgentStream({ onMessage: handleAgentEvent });
 
-  // When switching chats or projects, recompute loading state based on stream connectivity / run status
-  React.useEffect(() => {
-    const key = `${activeProjectId}::${activeThreadId || ''}`;
-    if (lastSelectedThreadRef.current === key) return;
-    lastSelectedThreadRef.current = key;
+  // Derive thinking from final answer presence and basic run lifecycle
+  const latestRun = latestRunId ? runs[latestRunId] : undefined;
+  const latestRunStatus = latestRun?.status;
+  const latestRunConnected = latestRunId ? stream.isConnected(latestRunId) : false;
+  const latestRunHasFinalAnswer = Boolean(latestRun?.actions?.some(a => a.kind === 'final_answer'));
+  const isThinking = Boolean(
+    latestRunId && !latestRunHasFinalAnswer && (
+      latestRunConnected ||
+      latestRunStatus === 'streaming' ||
+      latestRunStatus === 'waiting_exec'
+    )
+  );
 
-    // Find runs belonging to this thread
-    const ids = runOrder.filter(id => {
-      const r = runs[id];
-      if (!r) return false;
-      if (r.projectId !== activeProjectId) return false;
-      const tid = r.threadId || `${activeProjectId}_default`;
-      return tid === (activeThreadId || `${activeProjectId}_default`);
-    });
-    if (ids.length === 0) {
-      setLoading(false);
-      setCancelling(false);
-      setCurrentTaskId(null);
-      return;
-    }
-    const latestId = ids[ids.length - 1];
-    const run = runs[latestId];
-    const connected = stream.isConnected(latestId);
-    const status = run?.status;
-    const active = connected || status === 'streaming' || status === 'waiting_exec';
-    if (active) { setCurrentTaskId(latestId); setLoading(true); }
-    else { setLoading(false); setCancelling(false); setCurrentTaskId(null); }
-  }, [activeProjectId, activeThreadId, runs, runOrder, setLoading, setCancelling, setCurrentTaskId, stream]);
+  // No legacy compatibility syncing; UI derives thinking state from runs
 
   // Initialize chat functionality
   const { sendPrompt, cancelCurrentTask } = useChat({
@@ -811,12 +817,12 @@ function App() {
       const systemPrompt = `Please update ${args.fileName} between lines ${args.startLine}-${args.endLine} according to the user's instruction. Only make minimal, precise edits within that range using the edit_code tool. Preserve style and indentation. Selected code snippet for reference (do not paste with line numbers):\n\n${args.selectedCode}`;
       setInput(`${instruction}\n\n${systemPrompt}`);
       setCodeFix(null);
-      if (!loading) {
+      if (!isThinking) {
         if (!isAuthenticated) { openModal(); return; }
         await sendPrompt();
       }
     };
-  }, [codeFix, setInput, loading, isAuthenticated, openModal, sendPrompt, setCodeFix]);
+  }, [codeFix, setInput, isThinking, isAuthenticated, openModal, sendPrompt, setCodeFix]);
   const handleRun = React.useCallback(() => {
     const merged: Record<string, string> = { ...project };
     // If a proposal exists for active file and is visible, prefer current editor content via code state
@@ -838,13 +844,14 @@ function App() {
 
 
   const handleSendMessage = async () => {
-    if (!input.trim() || loading) return;
+    if (!input.trim() || isThinking) return;
     if (!isAuthenticated) { openModal(); return; }
     await sendPrompt();
   };
 
   const handleCancelTask = () => {
-    if (currentTaskId && !cancelling) {
+    // Cancel only if the latest run is the active thinking one
+    if (latestRunId && isThinking && !cancelling) {
       cancelCurrentTask();
     }
   };
@@ -894,8 +901,8 @@ function App() {
   }, [play.status, pendingExecResume, play.logs, stream, updateAction, setRunStatus]);
 
   const pendingExecRequest = React.useMemo(() => {
-    if (!currentTaskId) return null;
-    const run = runs[currentTaskId];
+    if (!latestRunId) return null;
+    const run = runs[latestRunId];
     if (!run || run.actions.length === 0) return null;
     for (let i = run.actions.length - 1; i >= 0; i -= 1) {
       const a = run.actions[i];
@@ -904,10 +911,10 @@ function App() {
       }
     }
     return null;
-  }, [runs, currentTaskId]);
+  }, [runs, latestRunId]);
 
   const handleRejectExecution = async () => {
-    if (!pendingExecRequest || !currentTaskId) return;
+    if (!pendingExecRequest || !latestRunId) return;
     setExecutingCode(true);
     setExecutionAction('reject');
 
@@ -917,13 +924,13 @@ function App() {
     const resumeToken = pendingExecRequest.resumeToken;
     if (resumeToken) {
       // Close current SSE stream to avoid duplicate events during resume
-      stream.disconnect(currentTaskId);
+      stream.disconnect(latestRunId);
       const small = rejectMsg.length > 20000 ? rejectMsg.slice(-20000) : rejectMsg;
-      stream.resume(currentTaskId, resumeToken, small);
+      stream.resume(latestRunId, resumeToken, small);
     }
 
     // Update action locally
-    updateAction(currentTaskId!, pendingExecRequest.id, prev => ({
+    updateAction(latestRunId!, pendingExecRequest.id, prev => ({
       ...(prev as Action),
       status: 'failed',
     }));
@@ -935,7 +942,7 @@ function App() {
       message: rejectMsg,
       timestamp: new Date().toISOString(),
     } as Action;
-    updateAction(currentTaskId!, noticeAction.id, () => noticeAction);
+    updateAction(latestRunId!, noticeAction.id, () => noticeAction);
 
     setExecutingCode(false);
     setExecutionAction(null);
@@ -943,7 +950,7 @@ function App() {
   };
 
   const handleAcceptExecution = async () => {
-    if (!pendingExecRequest || !currentTaskId) return;
+    if (!pendingExecRequest || !latestRunId) return;
     setExecutingCode(true);
     setExecutionAction('accept');
 
@@ -955,7 +962,7 @@ function App() {
     // Defer agent resume until sandbox completes; stash context
     const resumeToken = pendingExecRequest.resumeToken;
     if (resumeToken) {
-      setPendingExecResume({ runId: currentTaskId, actionId: pendingExecRequest.id, resumeToken });
+      setPendingExecResume({ runId: latestRunId, actionId: pendingExecRequest.id, resumeToken });
     }
     // Leave executing state true until play finishes
   };
@@ -1367,7 +1374,7 @@ function App() {
             <Timeline
               actions={timelineActions}
               isEmpty={timelineActions.length === 0}
-              loading={loading || timelineActions.some(a => a.status === 'running')}
+              loading={isThinking}
               onOpenFile={(path) => {
                 const normalized = (path || '').replace(/^\//,'');
                 if (!normalized) return;
@@ -1396,8 +1403,8 @@ function App() {
               value={input}
               onChange={setInput}
               onSend={handleSendMessage}
-              sendDisabled={loading}
-              showCancel={!!currentTaskId}
+              sendDisabled={isThinking}
+              showCancel={!!latestRunId && isThinking}
               onCancel={handleCancelTask}
               cancelling={cancelling}
               suggestions={(() => {

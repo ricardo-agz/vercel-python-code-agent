@@ -180,17 +180,6 @@ const ProjectTabs: React.FC<ProjectTabsProps> = ({ projects, activeProjectId, on
       <div className="pr-2 flex items-center h-full">
         <button
           type="button"
-          onClick={onDownload}
-          className="inline-flex items-center gap-1 px-2 py-1 text-sm rounded cursor-pointer mr-2"
-          style={{ background: 'var(--vscode-surface)', color: 'var(--vscode-text)', border: '1px solid var(--vscode-panel-border)' }}
-          title="Download ZIP"
-          aria-label="Download ZIP"
-        >
-          <Download className="w-4 h-4" />
-          <span>Download ZIP</span>
-        </button>
-        <button
-          type="button"
           onClick={onAdd}
           className="inline-flex items-center gap-1 px-2 py-1 text-sm rounded cursor-pointer"
           style={{ background: 'var(--vscode-surface)', color: 'var(--vscode-text)', border: '1px solid var(--vscode-panel-border)' }}
@@ -241,6 +230,16 @@ const ProjectTabs: React.FC<ProjectTabsProps> = ({ projects, activeProjectId, on
                     >
                       <Copy className="w-3.5 h-3.5" />
                       <span>Clone</span>
+                    </button>
+                    <button
+                      role="menuitem"
+                      type="button"
+                      onClick={() => { onDownload(); setOpenMenuId(null); }}
+                      className="w-full flex items-center gap-2 px-3 py-1.5 text-left hover:bg-white/5"
+                      aria-label="Download ZIP"
+                    >
+                      <Download className="w-3.5 h-3.5" />
+                      <span>Download ZIP</span>
                     </button>
                     <div className="h-px my-1" style={{ background: 'var(--vscode-panel-border)' }} />
                     <button

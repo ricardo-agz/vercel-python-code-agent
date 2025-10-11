@@ -7,6 +7,9 @@ interface UseAgentEventsProps {
   setLoading: (loading: boolean) => void;
   setCurrentTaskId: (taskId: string | null) => void;
   setCancelling: (cancelling: boolean) => void;
+  // Allow updating UI state for background runs by project id
+  setLoadingForProject?: (projectId: string, loading: boolean) => void;
+  setCurrentTaskIdForProject?: (projectId: string, taskId: string | null) => void;
   upsertProposal: (filePath: string, newContent: string) => void;
   onCreateFolder?: (folderPath: string) => void;
   onDeleteFolder?: (folderPath: string) => void;
@@ -23,6 +26,8 @@ export const useAgentEvents = ({
   setLoading,
   setCurrentTaskId,
   setCancelling,
+  setLoadingForProject,
+  setCurrentTaskIdForProject,
   upsertProposal,
   onCreateFolder,
   onDeleteFolder,
@@ -290,7 +295,13 @@ export const useAgentEvents = ({
               updateAction(event.task_id, a.id, (prev) => ({ ...(prev as Action), status: 'done' }) as Action);
             }
           }
+          // Ensure background thread/project UI clears loading
+          if (run.projectId) {
+            setLoadingForProject?.(run.projectId, false);
+            setCurrentTaskIdForProject?.(run.projectId, null);
+          }
         }
+        // Also clear active UI if this run is currently active
         if (!isActiveRun || isActiveRun(event.task_id)) {
           setLoading(false);
           setCurrentTaskId(null);
@@ -308,6 +319,21 @@ export const useAgentEvents = ({
         } as Action;
         addAction(event.task_id, notice);
         setRunStatus(event.task_id, 'cancelled');
+        // Clear any lingering running actions so UI hides loaders
+        {
+          const run = runsRef.current[event.task_id];
+          if (run) {
+            for (const a of run.actions) {
+              if (a.status === 'running') {
+                updateAction(event.task_id, a.id, (prev) => ({ ...(prev as Action), status: 'done' }) as Action);
+              }
+            }
+            if (run.projectId) {
+              setLoadingForProject?.(run.projectId, false);
+              setCurrentTaskIdForProject?.(run.projectId, null);
+            }
+          }
+        }
         if (!isActiveRun || isActiveRun(event.task_id)) {
           setLoading(false);
           setCancelling(false);
@@ -327,6 +353,21 @@ export const useAgentEvents = ({
         } as Action;
         addAction(event.task_id, notice);
         setRunStatus(event.task_id, 'failed');
+        // Mark any running actions as failed to avoid stale spinners
+        {
+          const run = runsRef.current[event.task_id];
+          if (run) {
+            for (const a of run.actions) {
+              if (a.status === 'running') {
+                updateAction(event.task_id, a.id, (prev) => ({ ...(prev as Action), status: 'failed' }) as Action);
+              }
+            }
+            if (run.projectId) {
+              setLoadingForProject?.(run.projectId, false);
+              setCurrentTaskIdForProject?.(run.projectId, null);
+            }
+          }
+        }
         if (!isActiveRun || isActiveRun(event.task_id)) {
           setLoading(false);
           setCancelling(false);
@@ -343,6 +384,8 @@ export const useAgentEvents = ({
     setLoading,
     setCurrentTaskId,
     setCancelling,
+    setLoadingForProject,
+    setCurrentTaskIdForProject,
     upsertProposal,
     onCreateFolder,
     onDeleteFolder,

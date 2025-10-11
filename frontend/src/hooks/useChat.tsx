@@ -97,7 +97,7 @@ export const useChat = ({
 
       // Open SSE stream for this task; events are handled globally by useAgentStream → useAgentEvents
       stream.connect(task_id, stream_token);
-      // Mark run as actively streaming
+      // Mark run as actively streaming (latest run will be treated as active in UI)
       setRunStatus(task_id, 'streaming');
     } else {
       console.error('enqueue failed');

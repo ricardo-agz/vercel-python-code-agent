@@ -34,7 +34,7 @@ export const Timeline: React.FC<TimelineProps> = ({ actions, isEmpty, loading, o
                 return (
                 <div key={key} className="ml-4">
                   <div className="px-3 py-2 rounded-lg ml-auto" style={{ backgroundColor: 'var(--vscode-accent)', color: '#ffffff' }}>
-                      <p className="text-sm whitespace-pre-wrap">{action.content}</p>
+                      <p className="text-sm whitespace-pre-wrap break-words" style={{ overflowWrap: 'anywhere', wordBreak: 'break-word' }}>{action.content}</p>
                     </div>
                   </div>
                 );
@@ -42,7 +42,7 @@ export const Timeline: React.FC<TimelineProps> = ({ actions, isEmpty, loading, o
                 return (
                 <div key={key} className="mr-4">
                   <div className="px-3 py-2 rounded-lg" style={{ backgroundColor: 'var(--vscode-surface)', color: 'var(--vscode-text)' }}>
-                      <p className="text-sm whitespace-pre-wrap">{action.message || ''}</p>
+                      <p className="text-sm whitespace-pre-wrap break-words" style={{ overflowWrap: 'anywhere', wordBreak: 'break-word' }}>{action.message || ''}</p>
                     </div>
                   </div>
                 );
@@ -242,7 +242,7 @@ export const Timeline: React.FC<TimelineProps> = ({ actions, isEmpty, loading, o
                 return (<div key={key} className="text-xs" style={{ color: 'var(--vscode-subtle)' }}>Running {action.toolName}...</div>);
               case 'assistant_thought':
                 return (
-                <div key={key} className="mr-4 px-2 text-xs" style={{ color: 'var(--vscode-muted)', fontStyle: 'italic' }}>
+                <div key={key} className="mr-4 px-2 text-xs" style={{ color: 'var(--vscode-muted)', fontStyle: 'italic', wordBreak: 'break-word', overflowWrap: 'anywhere' }}>
                     {action.content || ''}
                   </div>
                 );
@@ -250,7 +250,7 @@ export const Timeline: React.FC<TimelineProps> = ({ actions, isEmpty, loading, o
                 return (
                 <div key={key} className="mr-4">
                   <div className="px-3 py-2 rounded-lg" style={{ backgroundColor: 'var(--vscode-surface)', color: 'var(--vscode-text)' }}>
-                      <p className="text-sm whitespace-pre-wrap">{action.content || ''}</p>
+                      <p className="text-sm whitespace-pre-wrap break-words" style={{ overflowWrap: 'anywhere', wordBreak: 'break-word' }}>{action.content || ''}</p>
                     </div>
                   </div>
                 );
