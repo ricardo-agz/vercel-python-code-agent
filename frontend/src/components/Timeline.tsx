@@ -330,7 +330,7 @@ const MiniTerminal: React.FC<{
     }
   }, [open, output]);
 
-  const lineHeightEm = 1.2; // keep in sync with pre style
+  const lineHeightPx = 16; // keep in sync with pre style
 
   return (
     <div className="text-xs" style={{ border: '1px solid var(--vscode-panel-border)', borderRadius: 6, overflow: 'hidden', background: 'var(--vscode-panel)' }}>
@@ -350,12 +350,14 @@ const MiniTerminal: React.FC<{
         // Show the two-line live tail only while the command is running
         status === 'running' ? (
         <div style={{ borderTop: '1px dashed var(--vscode-panel-border)', position: 'relative' }} aria-live="polite">
-          <div style={{ height: `calc(${2 * lineHeightEm}em + 4px)`, overflow: 'hidden', position: 'relative' }}>
+          <div style={{ height: `${2 * lineHeightPx + 4}px`, overflow: 'hidden', position: 'relative', display: 'flex', alignItems: 'flex-end' }}>
             <pre
-              className="m-0 px-2 py-0.5 font-mono text-xs whitespace-pre-wrap"
+              className="m-0 px-2 font-mono text-xs whitespace-pre-wrap"
               style={{
                 color: 'var(--vscode-subtle)',
-                lineHeight: `${lineHeightEm}em`,
+                lineHeight: `${lineHeightPx}px`,
+                paddingTop: 2,
+                paddingBottom: 2,
               }}
             >
               <code>{tailText}</code>
@@ -366,7 +368,7 @@ const MiniTerminal: React.FC<{
                 left: 0,
                 right: 0,
                 top: 0,
-                height: 12,
+                height: 14,
                 background: 'linear-gradient(180deg, var(--vscode-panel) 0%, rgba(0,0,0,0) 85%)',
                 pointerEvents: 'none',
               }}

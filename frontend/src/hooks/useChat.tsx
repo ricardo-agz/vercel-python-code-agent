@@ -12,6 +12,7 @@ interface UseChatProps {
   project: Record<string, string>;
   proposals?: Record<string, string>;
   projectId: string;
+  threadId: string;
   setInput: (input: string) => void;
   setLoading: (loading: boolean) => void;
   setCurrentTaskId: (taskId: string | null) => void;
@@ -28,6 +29,7 @@ export const useChat = ({
   project,
   proposals,
   projectId,
+  threadId,
   setInput,
   setLoading,
   setCurrentTaskId,
@@ -36,7 +38,7 @@ export const useChat = ({
   model,
 }: UseChatProps) => {
   const { isAuthenticated, openModal } = useAuth();
-  const { runs, runOrder, createRun, addAction, updateAction } = useRuns();
+  const { runs, runOrder, createRun, addAction, updateAction, setRunStatus } = useRuns();
   const sendPrompt = useCallback(async () => {
     if (!input.trim()) return;
     if (!isAuthenticated) {
@@ -51,6 +53,7 @@ export const useChat = ({
       const run = runs[id];
       if (!run) return [] as { role: string; content: string }[];
       if (run.projectId !== projectId) return [] as { role: string; content: string }[];
+      if (run.threadId !== threadId) return [] as { role: string; content: string }[];
       const messages: { role: string; content: string }[] = [];
       for (const a of run.actions) {
         if (a.kind === 'user_message') messages.push({ role: 'user', content: (a as Action & { content: string }).content });
@@ -79,7 +82,7 @@ export const useChat = ({
 
     if (res.ok) {
       const { task_id, stream_token } = await res.json();
-      createRun(task_id, input, projectId);
+      createRun(task_id, input, projectId, threadId);
       setCurrentTaskId(task_id);
 
       // store user message action
@@ -94,11 +97,13 @@ export const useChat = ({
 
       // Open SSE stream for this task; events are handled globally by useAgentStream → useAgentEvents
       stream.connect(task_id, stream_token);
+      // Mark run as actively streaming
+      setRunStatus(task_id, 'streaming');
     } else {
       console.error('enqueue failed');
       setLoading(false);
     }
-  }, [input, isAuthenticated, openModal, userId, project, proposals, projectId, setInput, setLoading, createRun, addAction, setCurrentTaskId, runs, runOrder, stream, model]);
+  }, [input, isAuthenticated, openModal, userId, project, proposals, projectId, threadId, setInput, setLoading, createRun, addAction, setCurrentTaskId, runs, runOrder, stream, model, setRunStatus]);
 
   const cancelCurrentTask = useCallback(() => {
     if (!currentTaskId || cancelling) return;
@@ -122,11 +127,13 @@ export const useChat = ({
       message: 'Task was cancelled.',
       timestamp: new Date().toISOString(),
     } as Action);
+    // Update run status to cancelled
+    setRunStatus(currentTaskId, 'cancelled');
     // Clear UI state
     setCancelling(false);
     setLoading(false);
     setCurrentTaskId(null);
-  }, [currentTaskId, cancelling, setCancelling, setLoading, setCurrentTaskId, stream, addAction, runs, updateAction]);
+  }, [currentTaskId, cancelling, setCancelling, setLoading, setCurrentTaskId, stream, addAction, runs, updateAction, setRunStatus]);
 
   return {
     sendPrompt,

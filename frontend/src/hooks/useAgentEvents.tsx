@@ -1,4 +1,4 @@
-import { useCallback } from 'react';
+import { useCallback, useRef, useEffect } from 'react';
 import type { AgentEvent } from '../types';
 import { useRuns } from '../context/RunContext';
 import type { Action } from '../types/run';
@@ -15,6 +15,8 @@ interface UseAgentEventsProps {
   onDeleteFile?: (filePath: string) => void;
   onUpsertFile?: (filePath: string, content: string) => void;
   onSetPreviewUrl?: (url: string | null) => void;
+  // Only affect UI states when the event belongs to the active run
+  isActiveRun?: (taskId: string) => boolean;
 }
 
 export const useAgentEvents = ({
@@ -29,8 +31,11 @@ export const useAgentEvents = ({
   onDeleteFile,
   onUpsertFile,
   onSetPreviewUrl,
+  isActiveRun,
 }: UseAgentEventsProps) => {
-  const { runs, addAction, updateAction, appendActionLog } = useRuns();
+  const { runs, addAction, updateAction, appendActionLog, setRunStatus } = useRuns();
+  const runsRef = useRef(runs);
+  useEffect(() => { runsRef.current = runs; }, [runs]);
 
   const handleEvent = useCallback((event: AgentEvent) => {
     switch (event.event_type) {
@@ -52,8 +57,8 @@ export const useAgentEvents = ({
 
         // If this is a code execution request we've already resolved (failed/done), ignore repeats
         if (toolCall.function.name === 'request_code_execution') {
-          const existing = runs[event.task_id]?.actions.find((a) => a.id === toolCall.id && a.kind === 'exec_request');
-          const someOtherExecExists = runs[event.task_id]?.actions.some((a) => a.kind === 'exec_request' && a.id !== toolCall.id);
+          const existing = runsRef.current[event.task_id]?.actions.find((a) => a.id === toolCall.id && a.kind === 'exec_request');
+          const someOtherExecExists = runsRef.current[event.task_id]?.actions.some((a) => a.kind === 'exec_request' && a.id !== toolCall.id);
           // Allow at most one exec request per run; ignore any new/different ones
           if (someOtherExecExists) break;
           if (existing && existing.status !== 'running') break;
@@ -75,6 +80,8 @@ export const useAgentEvents = ({
               ...(responseOnReject ? { responseOnReject } : { responseOnReject: toolCall.function.arguments?.response_on_reject }),
             } as Action;
           });
+          // Enter waiting state for execution approval
+          setRunStatus(event.task_id, 'waiting_exec');
           break;
         }
 
@@ -87,6 +94,8 @@ export const useAgentEvents = ({
           arguments: toolCall.function.arguments,
         } as Action;
         addAction(event.task_id, startAction);
+        // If tools are starting without exec gating, the run is actively streaming
+        setRunStatus(event.task_id, 'streaming');
         break;
       }
 
@@ -122,10 +131,10 @@ export const useAgentEvents = ({
         }
 
         if (toolCall.function.name === 'request_code_execution') {
-          const someOtherExecExists = runs[event.task_id]?.actions.some((a) => a.kind === 'exec_request' && a.id !== toolCall.id);
+          const someOtherExecExists = runsRef.current[event.task_id]?.actions.some((a) => a.kind === 'exec_request' && a.id !== toolCall.id);
           if (someOtherExecExists) break;
           // If user already resolved this exec request, ignore duplicates that would re-open the prompt
-          const existing = runs[event.task_id]?.actions.find((a) => a.id === toolCall.id && a.kind === 'exec_request');
+          const existing = runsRef.current[event.task_id]?.actions.find((a) => a.id === toolCall.id && a.kind === 'exec_request');
           if (existing && existing.status !== 'running') break;
 
           const resumeToken = resp.output_data?.resume_token as string | undefined;
@@ -272,8 +281,9 @@ export const useAgentEvents = ({
           timestamp: event.timestamp,
         } as Action;
         addAction(event.task_id, answerAction);
+        setRunStatus(event.task_id, 'done');
         // Clear any lingering running actions (e.g., exec_request) so UI hides modals/spinners
-        const run = runs[event.task_id];
+        const run = runsRef.current[event.task_id];
         if (run) {
           for (const a of run.actions) {
             if (a.status === 'running') {
@@ -281,8 +291,10 @@ export const useAgentEvents = ({
             }
           }
         }
-        setLoading(false);
-        setCurrentTaskId(null);
+        if (!isActiveRun || isActiveRun(event.task_id)) {
+          setLoading(false);
+          setCurrentTaskId(null);
+        }
         break;
       }
 
@@ -295,9 +307,12 @@ export const useAgentEvents = ({
           timestamp: event.timestamp,
         } as Action;
         addAction(event.task_id, notice);
-        setLoading(false);
-        setCancelling(false);
-        setCurrentTaskId(null);
+        setRunStatus(event.task_id, 'cancelled');
+        if (!isActiveRun || isActiveRun(event.task_id)) {
+          setLoading(false);
+          setCancelling(false);
+          setCurrentTaskId(null);
+        }
         break;
       }
 
@@ -311,9 +326,12 @@ export const useAgentEvents = ({
           timestamp: event.timestamp,
         } as Action;
         addAction(event.task_id, notice);
-        setLoading(false);
-        setCancelling(false);
-        setCurrentTaskId(null);
+        setRunStatus(event.task_id, 'failed');
+        if (!isActiveRun || isActiveRun(event.task_id)) {
+          setLoading(false);
+          setCancelling(false);
+          setCurrentTaskId(null);
+        }
         break;
       }
 
@@ -336,7 +354,9 @@ export const useAgentEvents = ({
     appendActionLog,
     addAction,
     updateAction,
-    runs,
+    isActiveRun,
+    setRunStatus,
+    // Deliberately exclude runs; use runsRef to avoid stale closures
   ]);
 
   return handleEvent;

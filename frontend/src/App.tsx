@@ -23,6 +23,8 @@ import ProjectTabs, { type ProjectTab } from './components/ProjectTabs';
 import NewProjectModal from './components/NewProjectModal';
 import { getTemplateById, TEMPLATES } from './templates/index';
 import { loadPersistedState, savePersistedState, type PersistedState, type PersistedProjectState } from './lib/persistence';
+import { getProjectChatThreads, setCurrentChatThread, startNewChatThread, upsertCurrentChatThread, mergeThreadIntoRuns, upsertThreadById, deleteChatThread, type PersistedChatThread, MAX_THREADS_PER_PROJECT } from './lib/persistence';
+import { History as HistoryIcon, Plus, X } from 'lucide-react';
 
 type ResizableCenterProps = {
   code: string;
@@ -190,6 +192,8 @@ function App() {
     cancelling: boolean;
     model: string;
     codeFix: { fileName: string; startLine: number; endLine: number; selectedCode: string } | null;
+    activeThreadId: string | null;
+    templateId: string;
   };
 
   const defaultTemplateId = 'fastapi';
@@ -197,13 +201,26 @@ function App() {
   const [projectStates, setProjectStates] = useState<Record<string, ProjectState>>(() => {
     if (persisted?.projectStates && Object.keys(persisted.projectStates).length) {
       const out: Record<string, ProjectState> = {};
-      for (const [id, s] of Object.entries(persisted.projectStates)) {
+      for (const [id, s] of (Object.entries(persisted.projectStates) as [string, PersistedProjectState][])) {
         const files = (s && s.files) ? s.files : (defaultTemplate.files);
         let activeFile = s?.activeFile;
         if (!activeFile || !(activeFile in files)) {
           const first = Object.keys(files)[0];
           activeFile = first || defaultTemplate.defaultActiveFile;
         }
+        const inferredTemplateId = s?.templateId ?? (() => {
+          try {
+            const fileNames = Object.keys(files || {});
+            if (fileNames.includes('main.py')) return 'fastapi';
+            if (fileNames.includes('main.go')) return 'go';
+            if (fileNames.some(f => f.startsWith('src/app/') || f === 'next.config.ts')) return 'next';
+            if (fileNames.some(f => f.startsWith('backend/')) && fileNames.some(f => f.startsWith('src/app/'))) return 'react_fastapi';
+            if (fileNames.some(f => f.startsWith('config/') && f.endsWith('.rb'))) return 'rails';
+          } catch {
+            /* ignore errors during template inference */
+          }
+          return defaultTemplateId;
+        })();
         out[id] = {
           files,
           proposals: {},
@@ -216,6 +233,8 @@ function App() {
           cancelling: false,
           model: s?.model || 'anthropic/claude-sonnet-4.5',
           codeFix: null,
+          activeThreadId: null,
+          templateId: inferredTemplateId,
         };
       }
       // Ensure every project has a state
@@ -233,6 +252,8 @@ function App() {
             cancelling: false,
             model: 'anthropic/claude-sonnet-4.5',
             codeFix: null,
+            activeThreadId: null,
+            templateId: defaultTemplateId,
           };
         }
       }
@@ -251,6 +272,8 @@ function App() {
         cancelling: false,
         model: 'anthropic/claude-sonnet-4.5',
         codeFix: null,
+        activeThreadId: null,
+        templateId: defaultTemplateId,
       },
     } as Record<string, ProjectState>;
   });
@@ -266,6 +289,7 @@ function App() {
         folders: st.folders,
         expandedFolders: st.expandedFolders,
         model: st.model,
+        templateId: st.templateId,
       };
     }
     const activeIdSafe = projects.some(p => p.id === activeProjectId) ? activeProjectId : (projects[0]?.id || '');
@@ -292,6 +316,8 @@ function App() {
     cancelling: false,
     model: 'anthropic/claude-sonnet-4.5',
     codeFix: null,
+    activeThreadId: null,
+    templateId: defaultTemplateId,
   } as ProjectState);
   const project = activeState.files;
   const proposals = activeState.proposals;
@@ -304,6 +330,7 @@ function App() {
   const cancelling = activeState.cancelling;
   const model = activeState.model;
   const codeFix = activeState.codeFix;
+  const activeThreadId = activeState.activeThreadId;
   const nextProjectName = React.useMemo(() => `Project ${projects.length + 1}`, [projects.length]);
 
   const setProject = (updater: (prev: Record<string, string>) => Record<string, string>) => {
@@ -345,6 +372,9 @@ function App() {
   const setCodeFix = React.useCallback((next: ProjectState['codeFix']) => {
     setProjectStates(prev => ({ ...prev, [activeProjectId]: { ...prev[activeProjectId], codeFix: next } }));
   }, [activeProjectId]);
+  const setActiveThreadId = React.useCallback((threadId: string | null) => {
+    setProjectStates(prev => ({ ...prev, [activeProjectId]: { ...prev[activeProjectId], activeThreadId: threadId } }));
+  }, [activeProjectId]);
 
   const code = project[activeFile] ?? '';
   const setCode = (next: string) => setProject(prev => ({ ...prev, [activeFile]: next }));
@@ -376,9 +406,111 @@ function App() {
   // Deprecated with ThreePane; retained conceptually for potential future use
 
   // Runs context
-  const { runs, runOrder, updateAction, clearProjectRuns } = useRuns();
-  // Code-fix modal state
-  // codeFix scoped per project
+  const { runs, runOrder, updateAction, mergeProjectRuns, setRunStatus } = useRuns();
+
+  // ---------------- Chat persistence / history ----------------
+  const [chatThreads, setChatThreads] = useState<PersistedChatThread[]>(() => getProjectChatThreads(activeProjectId));
+  const [showChatHistory, setShowChatHistory] = useState<boolean>(false);
+  const chatHistoryRef = React.useRef<HTMLDivElement | null>(null);
+
+  // Close chat history when clicking outside of its container
+  React.useEffect(() => {
+    if (!showChatHistory) return;
+    const handleDocMouseDown = (e: MouseEvent) => {
+      const root = chatHistoryRef.current;
+      if (root && !root.contains(e.target as Node)) {
+        setShowChatHistory(false);
+      }
+    };
+    document.addEventListener('mousedown', handleDocMouseDown);
+    return () => {
+      document.removeEventListener('mousedown', handleDocMouseDown);
+    };
+  }, [showChatHistory]);
+
+  // Keep a memo of last human message timestamps to avoid flicker (only refresh list when a thread's last human time changes)
+  const lastHumanAtByThreadRef = React.useRef<Record<string, string | undefined>>({});
+  // Track last selected thread key to detect thread switches
+  const lastSelectedThreadRef = React.useRef<string>('');
+
+  // When project changes, load its threads and merge all into memory (do not clear to avoid dropping active streams)
+  React.useEffect(() => {
+    const threads = getProjectChatThreads(activeProjectId);
+    setChatThreads(threads);
+    if (threads && threads.length > 0) {
+      for (const t of threads) {
+        const { runs: scopedRuns, order } = mergeThreadIntoRuns(activeProjectId, t);
+        mergeProjectRuns(activeProjectId, scopedRuns, order, t.id);
+      }
+      // Set active thread to most recent if none selected
+      if (!activeState.activeThreadId) {
+        setProjectStates(prev => ({
+          ...prev,
+          [activeProjectId]: { ...prev[activeProjectId], activeThreadId: threads[0]?.id || `${activeProjectId}_default` },
+        }));
+      }
+    } else {
+      // Ensure we have a default active thread id even with no threads
+      setProjectStates(prev => ({
+        ...prev,
+        [activeProjectId]: { ...prev[activeProjectId], activeThreadId: `${activeProjectId}_default` },
+      }));
+    }
+  }, [activeProjectId, mergeProjectRuns, activeState.activeThreadId]);
+
+  // As runs change for this project, persist per-thread so background chats are saved too
+  // Only refresh the thread list if lastHumanAt changed (i.e., a user_message), to prevent flicker during logs/tool updates
+  React.useEffect(() => {
+    // Group runs by thread within the active project
+    const grouped: Record<string, { runs: Record<string, typeof runs[string]>; order: string[] }> = {};
+    for (const id of runOrder) {
+      const r = runs[id];
+      if (!r || r.projectId !== activeProjectId) continue;
+      const tid = r.threadId || `${activeProjectId}_default`;
+      if (!grouped[tid]) grouped[tid] = { runs: {}, order: [] };
+      grouped[tid].runs[id] = r;
+      grouped[tid].order.push(id);
+    }
+    // If nothing yet, ensure at least a default thread exists to keep UX consistent
+    if (Object.keys(grouped).length === 0) {
+      upsertCurrentChatThread(activeProjectId, {}, []);
+      // Do not refresh list; no user message
+      return;
+    }
+    // Upsert all threads
+    for (const [threadId, data] of Object.entries(grouped)) {
+      upsertThreadById(activeProjectId, threadId, data.runs, data.order);
+    }
+    // Compute lastHumanAt map for this project from grouped data
+    const newMap: Record<string, string | undefined> = {};
+    for (const [tid, data] of Object.entries(grouped)) {
+      let latest = 0;
+      for (const rid of data.order) {
+        const run = data.runs[rid];
+        if (!run) continue;
+        for (const a of run.actions) {
+          if (a.kind === 'user_message' && a.timestamp) {
+            const t = Date.parse(a.timestamp);
+            if (!Number.isNaN(t) && t > latest) latest = t;
+          }
+        }
+      }
+      newMap[tid] = latest > 0 ? new Date(latest).toISOString() : undefined;
+    }
+    // Decide whether to refresh the UI list
+    const prevMap = lastHumanAtByThreadRef.current;
+    let changed = false;
+    const keys = new Set([...Object.keys(prevMap), ...Object.keys(newMap)]);
+    for (const k of keys) {
+      if (prevMap[k] !== newMap[k]) { changed = true; break; }
+    }
+    lastHumanAtByThreadRef.current = newMap;
+    if (changed) {
+      setChatThreads(getProjectChatThreads(activeProjectId));
+    }
+  }, [runs, runOrder, activeProjectId]);
+
+  // (moved below after stream is created)
 
   const openCodeFix = React.useCallback((args: { fileName: string; startLine: number; endLine: number; selectedCode: string }) => {
     setCodeFix(args);
@@ -396,9 +528,9 @@ function App() {
     return runOrder
       .map(id => runs[id])
       .filter((r): r is typeof runs[string] => Boolean(r))
-      .filter(run => (run.projectId || undefined) === activeProjectId)
+      .filter(run => (run.projectId || undefined) === activeProjectId && (activeThreadId ? run.threadId === activeThreadId : true))
       .flatMap(run => run.actions || []);
-  }, [runOrder, runs, activeProjectId]);
+  }, [runOrder, runs, activeProjectId, activeThreadId]);
 
   // Build an ignore matcher from .agentignore + .gitignore and defaults
   const gitignoreText = project['.gitignore'] || '';
@@ -492,6 +624,7 @@ function App() {
   }, [proposals, isPathIgnored]);
 
   // Map SSE events to UI actions and create the stream controller
+  const isActiveRun = React.useCallback((taskId: string) => taskId === currentTaskId, [currentTaskId]);
   const handleAgentEvent = useAgentEvents({
     setLoading,
     setCurrentTaskId,
@@ -611,8 +744,38 @@ function App() {
       // (The hook exposes setPreviewUrl for this purpose)
       (play as unknown as { setPreviewUrl?: (u: string | null) => void }).setPreviewUrl?.(url);
     },
+    isActiveRun,
   });
   const stream = useAgentStream({ onMessage: handleAgentEvent });
+
+  // When switching chats or projects, recompute loading state based on stream connectivity / run status
+  React.useEffect(() => {
+    const key = `${activeProjectId}::${activeThreadId || ''}`;
+    if (lastSelectedThreadRef.current === key) return;
+    lastSelectedThreadRef.current = key;
+
+    // Find runs belonging to this thread
+    const ids = runOrder.filter(id => {
+      const r = runs[id];
+      if (!r) return false;
+      if (r.projectId !== activeProjectId) return false;
+      const tid = r.threadId || `${activeProjectId}_default`;
+      return tid === (activeThreadId || `${activeProjectId}_default`);
+    });
+    if (ids.length === 0) {
+      setLoading(false);
+      setCancelling(false);
+      setCurrentTaskId(null);
+      return;
+    }
+    const latestId = ids[ids.length - 1];
+    const run = runs[latestId];
+    const connected = stream.isConnected(latestId);
+    const status = run?.status;
+    const active = connected || status === 'streaming' || status === 'waiting_exec';
+    if (active) { setCurrentTaskId(latestId); setLoading(true); }
+    else { setLoading(false); setCancelling(false); setCurrentTaskId(null); }
+  }, [activeProjectId, activeThreadId, runs, runOrder, setLoading, setCancelling, setCurrentTaskId, stream]);
 
   // Initialize chat functionality
   const { sendPrompt, cancelCurrentTask } = useChat({
@@ -623,6 +786,7 @@ function App() {
     project: projectForSend,
     proposals: proposalsForSend,
     projectId: activeProjectId,
+    threadId: activeThreadId || `${activeProjectId}_default`,
     setInput,
     setLoading,
     setCurrentTaskId,
@@ -630,6 +794,14 @@ function App() {
     stream,
     model,
   });
+
+  // Ensure code-fix submit is bound to the sendPrompt
+  React.useEffect(() => {
+    submitCodeFixRef.current = async (instruction: string) => {
+      setInput(`Fix the following code:\n\n${instruction}`);
+      await sendPrompt();
+    };
+  }, [sendPrompt, setInput]);
 
   // Initialize the submitCodeFix callback after sendPrompt is available
   React.useEffect(() => {
@@ -678,15 +850,15 @@ function App() {
   };
 
   const handleNewChat = React.useCallback(() => {
-    if (currentTaskId && !cancelling) {
-      cancelCurrentTask();
-    }
-    clearProjectRuns(activeProjectId);
+    const newThread = startNewChatThread(activeProjectId);
+    setChatThreads(getProjectChatThreads(activeProjectId));
+    setActiveThreadId(newThread.id);
+    // Reset UI state for this project to focus on new chat
     setInput('');
     setLoading(false);
     setCurrentTaskId(null);
     setCancelling(false);
-  }, [currentTaskId, cancelling, cancelCurrentTask, clearProjectRuns, activeProjectId, setInput, setLoading, setCurrentTaskId, setCancelling]);
+  }, [activeProjectId, setInput, setLoading, setCurrentTaskId, setCancelling, setActiveThreadId]);
 
   // When sandbox run completes after an approved exec request, resume the agent with logs
   React.useEffect(() => {
@@ -700,6 +872,7 @@ function App() {
     // Resume agent via SSE with sandbox output
     stream.disconnect(runId);
     stream.resume(runId, resumeToken, output);
+    setRunStatus(runId, 'streaming');
 
     // Add exec result action and mark request as completed/failed
     const resultAction: Action = {
@@ -718,7 +891,7 @@ function App() {
     setExecutingCode(false);
     setExecutionAction(null);
     setPendingExecResume(null);
-  }, [play.status, pendingExecResume, play.logs, stream, updateAction]);
+  }, [play.status, pendingExecResume, play.logs, stream, updateAction, setRunStatus]);
 
   const pendingExecRequest = React.useMemo(() => {
     if (!currentTaskId) return null;
@@ -809,6 +982,41 @@ function App() {
             onRename={(id, name) => {
               if (!name || !name.trim()) return;
               setProjects(prev => prev.map(p => (p.id === id ? { ...p, name: name.trim() } : p)));
+            }}
+            onClone={(id) => {
+              const source = projects.find(p => p.id === id);
+              if (!source) return;
+              const srcState = projectStates[id];
+              const existing = new Set(projects.map(p => (p.name || '').trim().toLowerCase()));
+              const base = (source.name || 'Project').trim();
+              const tryName = (n: number) => (n === 1 ? `${base} Copy` : `${base} Copy ${n}`);
+              let nameCandidate = tryName(1);
+              for (let i = 1; i < 1000 && existing.has(nameCandidate.trim().toLowerCase()); i += 1) {
+                nameCandidate = tryName(i + 1);
+              }
+              const newId = `proj_${Date.now().toString(36)}_${Math.random().toString(36).slice(2,7)}`;
+              setProjects(prev => [...prev, { id: newId, name: nameCandidate }]);
+              if (srcState) {
+                setProjectStates(prev => ({
+                  ...prev,
+                  [newId]: {
+                    files: { ...(srcState.files || {}) },
+                    proposals: {},
+                    activeFile: srcState.activeFile,
+                    folders: srcState.folders,
+                    expandedFolders: Array.isArray(srcState.expandedFolders) ? [...srcState.expandedFolders] : [],
+                    input: '',
+                    loading: false,
+                    currentTaskId: null,
+                    cancelling: false,
+                    model: srcState.model,
+                    codeFix: null,
+                    activeThreadId: null,
+                    templateId: srcState.templateId,
+                  },
+                }));
+              }
+              setActiveProjectId(newId);
             }}
             onDelete={(id) => {
               if (!window.confirm('Delete this project? This cannot be undone in this session.')) return;
@@ -1078,15 +1286,83 @@ function App() {
           <div className="p-4 text-sm" style={{ color: 'var(--vscode-muted)' }} />
         ) : (
           <>
-            <div className="px-4 py-2" style={{ borderBottom: '1px solid var(--vscode-panel-border)' }}>
+            <div className="px-4 py-2 flex items-center gap-2" style={{ borderBottom: '1px solid var(--vscode-panel-border)' }}>
               <button
                 onClick={handleNewChat}
-                className="px-2 py-1 rounded-sm text-xs"
+                className="w-8 h-8 rounded-sm flex items-center justify-center"
                 style={{ background: 'var(--vscode-surface)', color: 'var(--vscode-text)', border: '1px solid var(--vscode-panel-border)' }}
                 title="Start a new chat"
               >
-                New Chat
+                <Plus className="w-4 h-4" />
               </button>
+              <div className="relative">
+                {/* Container ref to detect outside clicks and close chat history */}
+                <div ref={chatHistoryRef} className="contents">
+                <button
+                  onClick={() => setShowChatHistory(v => !v)}
+                  className="w-8 h-8 rounded-sm flex items-center justify-center"
+                  style={{ background: 'var(--vscode-surface)', color: 'var(--vscode-text)', border: '1px solid var(--vscode-panel-border)' }}
+                  title={`Show chat history (keeps up to ${MAX_THREADS_PER_PROJECT})`}
+                >
+                  <HistoryIcon className="w-4 h-4" />
+                </button>
+                {showChatHistory && (
+                  <div className="absolute z-10 mt-2 p-2 rounded-sm w-64" style={{ background: 'var(--vscode-panel)', border: '1px solid var(--vscode-panel-border)' }}>
+                    {chatThreads.length === 0 ? (
+                      <div className="text-xs" style={{ color: 'var(--vscode-muted)' }}>No previous chats</div>
+                    ) : (
+                      <div className="flex flex-col gap-1">
+                        {chatThreads.map((t) => (
+                          <div key={t.id} className={`flex items-center gap-2 group`}>
+                            <button
+                              className={`flex-1 text-left px-2 py-1 rounded-sm text-xs ${activeThreadId === t.id ? 'ring-1' : ''}`}
+                              style={{ background: 'var(--vscode-contrast)', color: 'var(--vscode-text)', border: '1px solid var(--vscode-panel-border)' }}
+                              title={new Date(t.createdAt).toLocaleString()}
+                              onClick={() => {
+                                const chosen = setCurrentChatThread(activeProjectId, t.id);
+                                if (chosen) {
+                                  const { runs: scopedRuns, order } = mergeThreadIntoRuns(activeProjectId, chosen);
+                                  mergeProjectRuns(activeProjectId, scopedRuns, order, chosen.id);
+                                  // Do not refresh chatThreads list here to avoid flicker; just set active
+                                  setActiveThreadId(chosen.id);
+                                  setShowChatHistory(false);
+                                }
+                              }}
+                            >
+                              {t.title || `Chat`}
+                            </button>
+                            <button
+                              className="w-6 h-6 flex items-center justify-center rounded-sm opacity-70 group-hover:opacity-100 cursor-pointer"
+                              style={{ background: 'var(--vscode-surface)', color: 'var(--vscode-text)', border: '1px solid var(--vscode-panel-border)' }}
+                              title="Delete chat"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                // Delete from persistence
+                                deleteChatThread(activeProjectId, t.id);
+                                const nextList = getProjectChatThreads(activeProjectId);
+                                setChatThreads(nextList);
+                                // If we just deleted the active thread, select next available or default
+                                if (activeThreadId === t.id) {
+                                  const fallback = nextList[0]?.id || `${activeProjectId}_default`;
+                                  setActiveThreadId(fallback);
+                                  const chosen = nextList.find(x => x.id === fallback);
+                                  if (chosen) {
+                                    const { runs: scopedRuns, order } = mergeThreadIntoRuns(activeProjectId, chosen);
+                                    mergeProjectRuns(activeProjectId, scopedRuns, order, chosen.id);
+                                  }
+                                }
+                              }}
+                            >
+                              <X className="w-3 h-3" />
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+                </div>
+              </div>
             </div>
             <Timeline
               actions={timelineActions}
@@ -1124,16 +1400,18 @@ function App() {
               showCancel={!!currentTaskId}
               onCancel={handleCancelTask}
               cancelling={cancelling}
-              suggestions={
-                timelineActions.length === 0
-                  ? [
-                      'Add a FastAPI /todos API with in-memory CRUD (GET, POST, DELETE) and run',
-                      'Implement /math/fibonacci?n=20 that returns the sequence as JSON and run',
-                      'Add request logging middleware plus /health and /time endpoints and run',
-                      'Create a /text/wordcount endpoint that accepts text in JSON and returns counts and run',
-                    ]
-                  : undefined
-              }
+              suggestions={(() => {
+                if (timelineActions.length > 0) return undefined;
+                const tmpl = TEMPLATES.find(t => t.id === (projectStates[activeProjectId]?.templateId || defaultTemplateId));
+                const list = (tmpl?.suggestions && tmpl.suggestions.length > 0)
+                  ? tmpl!.suggestions
+                  : [
+                      'Create a minimal HTTP API scaffold (FastAPI/Express/Go/Rails) and run',
+                      'Add /health and /time endpoints with basic request logging and run',
+                      'Implement /text/wordcount that accepts JSON and returns counts and run',
+                    ];
+                return list;
+              })()}
             />
             <div className="px-4 py-2 text-xs text-gray-500">
               {isAuthenticated ? (
@@ -1169,6 +1447,8 @@ function App() {
             cancelling: false,
             model: 'anthropic/claude-sonnet-4.5',
             codeFix: null,
+          activeThreadId: null,
+          templateId,
           },
         }));
         setActiveProjectId(id);

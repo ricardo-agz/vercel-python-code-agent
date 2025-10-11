@@ -5,6 +5,7 @@ export type ProjectTemplate = {
   description: string;
   files: Record<string, string>;
   defaultActiveFile: string;
+  suggestions?: string[];
 };
 
 // Metadata for each template
@@ -15,6 +16,11 @@ const TEMPLATE_METADATA = [
     description: 'Start from an empty project',
     directory: 'blank',
     defaultActiveFile: 'README.md',
+    suggestions: [
+      'Create a minimal HTTP API scaffold (FastAPI/Express/Go/Rails) and run',
+      'Add /health and /time endpoints with basic request logging and run',
+      'Implement /text/wordcount that accepts JSON and returns counts and run',
+    ],
   },
   {
     id: 'fastapi',
@@ -22,6 +28,12 @@ const TEMPLATE_METADATA = [
     description: 'Python API with FastAPI + Uvicorn',
     directory: 'fastapi',
     defaultActiveFile: 'main.py',
+    suggestions: [
+      'Run this code.',
+      'Add a FastAPI /todos API with in-memory CRUD (GET, POST, DELETE) and run',
+      'Implement /math/fibonacci?n=20 that returns the sequence as JSON and run',
+      'Add request logging middleware plus /health and /time endpoints and run',
+    ],
   },
   {
     id: 'next',
@@ -29,6 +41,12 @@ const TEMPLATE_METADATA = [
     description: 'React framework with server-side rendering',
     directory: 'next',
     defaultActiveFile: 'src/app/page.tsx',
+    suggestions: [
+      'Run this code.',
+      'Add /api/todos route with in-memory CRUD (GET, POST, DELETE) and run',
+      'Implement /api/math/fibonacci?n=20 returning JSON and render it on the page and run',
+      'Add request logging plus /api/health and /api/time routes and run',
+    ],
   },
   {
     id: 'go',
@@ -36,6 +54,12 @@ const TEMPLATE_METADATA = [
     description: 'Minimal Go HTTP server',
     directory: 'go',
     defaultActiveFile: 'main.go',
+    suggestions: [
+      'Run this code.',
+      'Add /todos API with in-memory CRUD (GET, POST, DELETE) and run',
+      'Implement /math/fibonacci?n=20 that returns the sequence as JSON and run',
+      'Add request logging middleware plus /health and /time endpoints and run',
+    ],
   },
   {
     id: 'rails',
@@ -43,6 +67,12 @@ const TEMPLATE_METADATA = [
     description: 'Full-featured Rails 7.1 app with MVC architecture',
     directory: 'rails',
     defaultActiveFile: 'README.md',
+    suggestions: [
+      'Run this code.',
+      'Create a todo-app.',
+      'Build a blog app with authentication where users can create, like, and comment on posts and follow other users.',
+      'Create a fully functional Hacker News clone that actually looks like Hacker News.',
+    ],
   },
   {
     id: 'react_fastapi',
@@ -50,6 +80,11 @@ const TEMPLATE_METADATA = [
     description: 'Decoupled frontend (Next.js) and backend (FastAPI)',
     directory: 'react-fastapi',
     defaultActiveFile: 'backend/main.py',
+    suggestions: [
+      'Add FastAPI /todos and a Next.js page to list/add todos; connect API and run',
+      'Implement FastAPI /math/fibonacci?n=20 and display results in Next.js and run',
+      'Add FastAPI logging, /health, /time; add a Next.js status page and run',
+    ],
   },
 ];
 
@@ -97,6 +132,7 @@ function buildTemplates(): ProjectTemplate[] {
       description: meta.description,
       files,
       defaultActiveFile: meta.defaultActiveFile,
+      suggestions: meta.suggestions,
     });
   }
 

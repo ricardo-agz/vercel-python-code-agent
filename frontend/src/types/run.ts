@@ -75,5 +75,18 @@ export interface Run {
   userPrompt: string;
   // Project scoping for multi-project tabs
   projectId?: string;
+  // Chat thread scoping within a project
+  threadId?: string;
+  // High-level lifecycle status of the run (separate from per-action statuses)
+  status?: RunStatus;
   actions: Action[];
 } 
+
+// Coarse-grained lifecycle for a run, used for UI state and switching logic
+export type RunStatus =
+  | 'queued'
+  | 'streaming'       // actively receiving events from SSE
+  | 'waiting_exec'    // paused, waiting for user to decide on execution
+  | 'done'            // completed with agent_output
+  | 'failed'          // terminal error
+  | 'cancelled';      // user cancelled
