@@ -1,4 +1,4 @@
-from vercel.sandbox import Sandbox
+from vercel.sandbox import AsyncSandbox as Sandbox
 from agents import RunContextWrapper
 
 from src.agent.context import IDEContext
