@@ -4,4 +4,3 @@
 ActiveRecord::Schema[7.1].define(version: 0) do
   # No tables yet - add migrations as needed
 end
-

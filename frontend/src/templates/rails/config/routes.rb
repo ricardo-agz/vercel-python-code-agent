@@ -7,4 +7,3 @@ Rails.application.routes.draw do
   # Health check endpoint
   get '/up', to: 'application#health_check'
 end
-

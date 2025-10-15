@@ -1,5 +1,3 @@
-from typing import List, Optional
-
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 
@@ -8,21 +6,21 @@ class Item(BaseModel):
     id: int
     name: str
     price: float
-    description: Optional[str] = None
+    description: str | None = None
 
 
 router = APIRouter()
 
 # Sample, read-only data suitable for stateless/serverless deployments
-SAMPLE_ITEMS: List[Item] = [
+SAMPLE_ITEMS: list[Item] = [
     Item(id=1, name="Widget", price=9.99, description="A simple widget"),
     Item(id=2, name="Gadget", price=19.99, description="A useful gadget"),
     Item(id=3, name="Doohickey", price=4.50),
 ]
 
 
-@router.get("/", response_model=List[Item])
-def list_items(q: Optional[str] = Query(default=None)) -> List[Item]:
+@router.get("/", response_model=list[Item])
+def list_items(q: str | None = Query(default=None)) -> list[Item]:
     items = SAMPLE_ITEMS
     if q:
         query = q.lower()
@@ -36,4 +34,3 @@ def get_item(item_id: int) -> Item:
         if item.id == item_id:
             return item
     raise HTTPException(status_code=404, detail="Item not found")
-

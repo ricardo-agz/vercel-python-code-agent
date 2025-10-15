@@ -1,5 +1,3 @@
-from typing import List, Optional
-
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 
@@ -7,12 +5,12 @@ from pydantic import BaseModel
 class User(BaseModel):
     id: int
     username: str
-    full_name: Optional[str] = None
+    full_name: str | None = None
 
 
 router = APIRouter()
 
-_users: List[User] = [
+_users: list[User] = [
     User(id=1, username="alice", full_name="Alice Anderson"),
     User(id=2, username="bob", full_name="Bob Brown"),
 ]
@@ -23,8 +21,8 @@ def read_me() -> User:
     return _users[0]
 
 
-@router.get("/", response_model=List[User])
-def list_users(limit: int = Query(default=50, ge=1, le=100)) -> List[User]:
+@router.get("/", response_model=list[User])
+def list_users(limit: int = Query(default=50, ge=1, le=100)) -> list[User]:
     return _users[:limit]
 
 

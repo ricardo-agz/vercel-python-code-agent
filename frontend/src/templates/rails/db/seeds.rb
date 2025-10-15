@@ -6,4 +6,3 @@
 #   Character.create(name: "Luke", movie: movies.first)
 
 puts "No seed data configured yet. Add your seeds here!"
-
