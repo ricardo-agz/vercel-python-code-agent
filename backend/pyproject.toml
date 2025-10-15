@@ -14,10 +14,17 @@ dependencies = [
   "uvicorn",
   "openai-agents[litellm]",
   "PyJWT==2.9.0",
-  "vercel-sandbox==0.0.1",
-  "vercel-sdk==0.0.5",
+  "vercel-sandbox==0.0.2",
+  "vercel-sdk==0.0.7",
   "httpx",
   "httpx-sse",
+  "ruff>=0.14.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "ruff>=0.5.0",
+    "mypy",
 ]
 
 [project.urls]

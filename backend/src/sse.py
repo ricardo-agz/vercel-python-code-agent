@@ -62,6 +62,7 @@ def tool_completed_sse(
         try:
             # fire-and-forget update; ignore if running outside async loop
             import asyncio
+
             coro = update_run_project(task_id, project)
             if asyncio.get_event_loop().is_running():
                 asyncio.create_task(coro)
@@ -71,7 +72,10 @@ def tool_completed_sse(
         except Exception:
             pass
         # Issue a compact resume token that only carries the run id
-        output_data = {**output_data, "resume_token": make_stream_token({"run_id": task_id})}
+        output_data = {
+            **output_data,
+            "resume_token": make_stream_token({"run_id": task_id}),
+        }
 
     return sse_format(
         emit_event(

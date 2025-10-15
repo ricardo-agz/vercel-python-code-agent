@@ -32,4 +32,3 @@ class IDEContext(BaseModel):
     # Per-sandbox filesystem snapshots
     sandbox_files_map: dict[str, list[str]] = Field(default_factory=dict)
     sandbox_file_meta_map: dict[str, dict[str, str]] = Field(default_factory=dict)
-    

@@ -68,7 +68,9 @@ async def run_play_flow(
     project: dict[str, str] = payload.get("project", {})
     is_ignored = make_ignore_predicate(project)
     filtered_project: dict[str, str] = {
-        p: c for p, c in project.items() if (not is_ignored(p)) or (p in {".gitignore", ".agentignore"})
+        p: c
+        for p, c in project.items()
+        if (not is_ignored(p)) or (p in {".gitignore", ".agentignore"})
     }
     entry_path: str = payload.get("entry_path", "")
     runtime_override: str | None = payload.get("runtime")
@@ -83,16 +85,19 @@ async def run_play_flow(
         )
         return
 
-
     # Ensure entry file content available even if ignored
-    content = (filtered_project.get(entry_path) or project.get(entry_path) or "")
+    content = filtered_project.get(entry_path) or project.get(entry_path) or ""
     is_fastapi = entry_path.lower().endswith(".py") and (
         "FastAPI(" in content
         or "from fastapi" in content
         or "import fastapi" in content
     )
     is_ruby = entry_path.lower().endswith(".rb")
-    port = int(os.getenv("SANDBOX_APP_PORT", "8000")) if is_fastapi else (4567 if is_ruby else None)
+    port = (
+        int(os.getenv("SANDBOX_APP_PORT", "8000"))
+        if is_fastapi
+        else (4567 if is_ruby else None)
+    )
 
     yield sse_format(
         emit_event(
@@ -255,7 +260,9 @@ async def run_play_flow(
                         )
                         return
             elif entry_path.lower().endswith(".rb"):
-                gemfile_path = _find_closest_file(filtered_project, entry_path, ["Gemfile"])
+                gemfile_path = _find_closest_file(
+                    filtered_project, entry_path, ["Gemfile"]
+                )
                 if gemfile_path:
                     try:
                         yield sse_format(
@@ -282,7 +289,9 @@ async def run_play_flow(
                         ["-lc", f"cd {sandbox.sandbox.cwd} && {bundler_install_cmd}"],
                     )
                     async for line in install_cmd.logs():
-                        yield sse_format(emit_event(task_id, "play_log", data=line.data))
+                        yield sse_format(
+                            emit_event(task_id, "play_log", data=line.data)
+                        )
                     install_done = await install_cmd.wait()
                     if install_done.exit_code != 0:
                         yield sse_format(
@@ -314,7 +323,7 @@ async def run_play_flow(
                         emit_event(
                             task_id,
                             "play_log",
-                            data=f"Installing Node dependencies in {(pkg_dir or '.') }...\n",
+                            data=f"Installing Node dependencies in {(pkg_dir or '.')}...\n",
                         )
                     )
                     install_cmd = await sandbox.run_command_detached(
@@ -379,7 +388,9 @@ async def run_play_flow(
         else:
             command_to_run = command
             if is_ruby:
-                command_to_run = f"( [ -f Gemfile ] && bundle exec {command} || {command} )"
+                command_to_run = (
+                    f"( [ -f Gemfile ] && bundle exec {command} || {command} )"
+                )
             cmd = await sandbox.run_command_detached(
                 "bash",
                 [
@@ -460,7 +471,7 @@ async def run_play_flow(
 
 @router.post("")
 async def create_play(request: PlayRequest) -> dict[str, Any]:
-    task_id = f"task_{int(asyncio.get_event_loop().time()*1000)}_{os.getpid()}"
+    task_id = f"task_{int(asyncio.get_event_loop().time() * 1000)}_{os.getpid()}"
     stream_token = make_stream_token(
         {
             "user_id": request.user_id,

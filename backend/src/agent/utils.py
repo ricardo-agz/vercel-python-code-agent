@@ -45,7 +45,14 @@ def build_project_input(
     sorted_paths = sorted(project.keys())
     # Truncate path list for very large projects; include a tail note
     listed_paths = sorted_paths[:max_list_entries]
-    file_list = "\n".join(listed_paths + ([f"... ({len(sorted_paths)-len(listed_paths)} more omitted)"] if len(sorted_paths) > len(listed_paths) else []))
+    file_list = "\n".join(
+        listed_paths
+        + (
+            [f"... ({len(sorted_paths) - len(listed_paths)} more omitted)"]
+            if len(sorted_paths) > len(listed_paths)
+            else []
+        )
+    )
 
     files_rendered: list[str] = []
     remaining = max_total_chars
@@ -53,7 +60,11 @@ def build_project_input(
         if remaining <= 0:
             break
         content = project[path] or ""
-        c = content if len(content) <= max_per_file_chars else content[:max_per_file_chars]
+        c = (
+            content
+            if len(content) <= max_per_file_chars
+            else content[:max_per_file_chars]
+        )
         rendered = f"FILE: {path}\n{display_code_with_line_numbers(c)}"
         if len(rendered) > remaining:
             # last-chance trim
@@ -173,6 +184,7 @@ def make_ignore_predicate(project: dict[str, str]) -> "callable[[str], bool]":
         # Directory match (e.g. foo/). If pattern includes a slash, treat as anchored path prefix.
         if pattern.endswith("/"):
             directory = pattern[:-1].lstrip("/")
+
             def _dir(path: str) -> bool:
                 n = (path or "").lstrip("/")
                 if not directory:
@@ -183,23 +195,30 @@ def make_ignore_predicate(project: dict[str, str]) -> "callable[[str], bool]":
                 # segment match anywhere (e.g., any "node_modules" segment in the path)
                 parts = n.split("/") if n else []
                 return directory in parts
+
             return _dir
 
         # Exact basename match
         if ("*" not in pattern) and ("?" not in pattern):
+
             def _exact(path: str) -> bool:
                 n = (path or "").lstrip("/")
                 base = n.split("/")[-1] if n else n
                 return base == pattern
+
             return _exact
 
         # Basic glob on basename
         import re
 
-        regex_str = "^" + "".join(
-            (".*" if tok == "*" else "." if tok == "?" else re.escape(tok))
-            for tok in [t for t in re.split(r"([*?])", pattern) if t != ""]
-        ) + "$"
+        regex_str = (
+            "^"
+            + "".join(
+                (".*" if tok == "*" else "." if tok == "?" else re.escape(tok))
+                for tok in [t for t in re.split(r"([*?])", pattern) if t != ""]
+            )
+            + "$"
+        )
         compiled = re.compile(regex_str)
 
         def _glob(path: str) -> bool:
@@ -210,6 +229,7 @@ def make_ignore_predicate(project: dict[str, str]) -> "callable[[str], bool]":
         return _glob
 
     predicates = [to_predicate(p) for p in patterns]
+
     def is_ignored(path: str) -> bool:
         for fn in predicates:
             try:

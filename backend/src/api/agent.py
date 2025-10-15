@@ -35,7 +35,7 @@ class RunRequest(BaseModel):
 
 
 def make_task_id() -> str:
-    return f"task_{int(time.time()*1000)}_{uuid.uuid4().hex[:8]}"
+    return f"task_{int(time.time() * 1000)}_{uuid.uuid4().hex[:8]}"
 
 
 @router.post("/")
@@ -77,7 +77,10 @@ async def run_events(run_id: str, token: str):
     if payload is None:
         # Gracefully end the stream with a run_failed event
         async def missing_generator() -> AsyncGenerator[str, None]:
-            yield sse_format(emit_event(run_id, "run_failed", error="Unknown or expired run id"))
+            yield sse_format(
+                emit_event(run_id, "run_failed", error="Unknown or expired run id")
+            )
+
         return StreamingResponse(missing_generator(), headers=SSE_HEADERS)
 
     async def event_generator() -> AsyncGenerator[str, None]:
@@ -102,8 +105,12 @@ async def resume_run(run_id: str, token: str, result: str):
         raise HTTPException(status_code=400, detail="Token does not match run id")
     base = await get_run_payload(run_id)
     if base is None:
+
         async def missing_generator() -> AsyncGenerator[str, None]:
-            yield sse_format(emit_event(run_id, "run_failed", error="Unknown or expired run id"))
+            yield sse_format(
+                emit_event(run_id, "run_failed", error="Unknown or expired run id")
+            )
+
         return StreamingResponse(missing_generator(), headers=SSE_HEADERS)
 
     async def event_generator() -> AsyncGenerator[str, None]:

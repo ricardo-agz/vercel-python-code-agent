@@ -80,7 +80,9 @@ def auth_login(req: Request) -> JSONResponse:
         origin = _backend_origin(req)
         redirect_uri = f"{origin}/api/auth/callback/vercel"
 
-        state_seed = f"{client_id}:{redirect_uri}:{_oauth_state_secret()}".encode("utf-8")
+        state_seed = f"{client_id}:{redirect_uri}:{_oauth_state_secret()}".encode(
+            "utf-8"
+        )
         state = hashlib.sha256(state_seed).hexdigest()
 
         verifier = _generate_code_verifier()
@@ -116,7 +118,9 @@ def auth_login(req: Request) -> JSONResponse:
         resp.set_cookie("vercel_oauth_redirect_to", redirect_to, **cookie_args)
         frontend_origin = req.headers.get("origin")
         if _is_allowed_frontend_origin(frontend_origin):
-            resp.set_cookie("vercel_oauth_frontend_origin", frontend_origin, **cookie_args)
+            resp.set_cookie(
+                "vercel_oauth_frontend_origin", frontend_origin, **cookie_args
+            )
         return resp
     except Exception as e:
         logger.error(e)
@@ -134,7 +138,9 @@ def auth_login_start(req: Request) -> RedirectResponse:
         origin = _backend_origin(req)
         redirect_uri = f"{origin}/api/auth/callback/vercel"
 
-        state_seed = f"{client_id}:{redirect_uri}:{_oauth_state_secret()}".encode("utf-8")
+        state_seed = f"{client_id}:{redirect_uri}:{_oauth_state_secret()}".encode(
+            "utf-8"
+        )
         state = hashlib.sha256(state_seed).hexdigest()
 
         verifier = _generate_code_verifier()
@@ -170,7 +176,9 @@ def auth_login_start(req: Request) -> RedirectResponse:
         resp.set_cookie("vercel_oauth_redirect_to", redirect_to, **cookie_args)
         frontend_origin = req.headers.get("origin")
         if _is_allowed_frontend_origin(frontend_origin):
-            resp.set_cookie("vercel_oauth_frontend_origin", frontend_origin, **cookie_args)
+            resp.set_cookie(
+                "vercel_oauth_frontend_origin", frontend_origin, **cookie_args
+            )
             return resp
     except Exception as e:
         logger.error(e)
@@ -257,7 +265,9 @@ async def auth_callback_vercel(request: Request) -> Response:
             )
             user_resp.raise_for_status()
 
-        redirect_abs = f"{frontend_origin}{redirect_to}" if frontend_origin else redirect_to
+        redirect_abs = (
+            f"{frontend_origin}{redirect_to}" if frontend_origin else redirect_to
+        )
         resp = RedirectResponse(redirect_abs, status_code=302)
         cookie_args = {
             "path": "/",

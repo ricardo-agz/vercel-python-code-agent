@@ -14,7 +14,6 @@ from src.agent.tools import (
     create_folder,
     delete_folder,
     rename_folder,
-    request_code_execution,
     sandbox_create,
     sandbox_stop,
     sandbox_run,
@@ -53,7 +52,8 @@ def create_ide_agent(model: str | None = None) -> Agent:
         "name": "IDE Agent",
         "instructions": instructions,
         "tools": [
-            # think,
+            think,
+            # fs ops
             edit_code,
             create_file,
             delete_file,
@@ -61,8 +61,7 @@ def create_ide_agent(model: str | None = None) -> Agent:
             create_folder,
             delete_folder,
             rename_folder,
-            request_code_execution,
-            # Sandbox controls
+            # sandbox controls
             sandbox_create,
             sandbox_stop,
             sandbox_run,
@@ -129,6 +128,7 @@ async def run_agent_flow(
     # Keep run store in sync with filtered project so resume tokens remain small
     try:
         import asyncio
+
         coro = update_run_project(task_id, filtered_project)
         if asyncio.get_event_loop().is_running():
             asyncio.create_task(coro)
@@ -270,9 +270,13 @@ async def resume_agent_flow(
 
     history = base.get("message_history", [])
     assistant_only = [
-        m["content"] for m in history if m.get("role") == "assistant" and m.get("content")
+        m["content"]
+        for m in history
+        if m.get("role") == "assistant" and m.get("content")
     ]
-    input_text = build_project_input(base["query"], filtered_project, history or assistant_only)
+    input_text = build_project_input(
+        base["query"], filtered_project, history or assistant_only
+    )
 
     selected_model = base.get("model")
     agent_instance = create_ide_agent(selected_model) if selected_model else ide_agent

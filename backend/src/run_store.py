@@ -18,7 +18,11 @@ def _cache_key(run_id: str) -> str:
 async def set_run_payload(run_id: str, payload: dict[str, Any]) -> None:
     """Store the base payload for a run id using Vercel Runtime Cache."""
     cache = get_cache(namespace=_NAMESPACE)
-    await cache.set(_cache_key(run_id), dict(payload), {"ttl": _TTL_SECONDS, "tags": [f"run:{run_id}"]})
+    await cache.set(
+        _cache_key(run_id),
+        dict(payload),
+        {"ttl": _TTL_SECONDS, "tags": [f"run:{run_id}"]},
+    )
 
 
 async def get_run_payload(run_id: str) -> Optional[dict[str, Any]]:
@@ -35,4 +39,8 @@ async def update_run_project(run_id: str, project: dict[str, str]) -> None:
     if isinstance(base, dict):
         updated = dict(base)
         updated["project"] = dict(project)
-        await cache.set(_cache_key(run_id), updated, {"ttl": _TTL_SECONDS, "tags": [f"run:{run_id}"]})
+        await cache.set(
+            _cache_key(run_id),
+            updated,
+            {"ttl": _TTL_SECONDS, "tags": [f"run:{run_id}"]},
+        )
