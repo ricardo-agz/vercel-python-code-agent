@@ -4,4 +4,3 @@ class HomeController < ApplicationController
     @timestamp = Time.current
   end
 end
-

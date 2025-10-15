@@ -6,4 +6,3 @@ class ApplicationController < ActionController::Base
     render json: { status: 'ok', timestamp: Time.current }, status: :ok
   end
 end
-
