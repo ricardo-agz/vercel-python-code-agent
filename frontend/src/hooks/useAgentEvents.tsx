@@ -16,6 +16,8 @@ interface UseAgentEventsProps {
   onDeleteFile?: (filePath: string) => void;
   onUpsertFile?: (filePath: string, content: string) => void;
   onSetPreviewUrl?: (url: string | null) => void;
+  // Signal that any live previews should refresh (e.g., iframe reload)
+  onRefreshPreview?: () => void;
   // Only affect UI states when the event belongs to the active run
   isActiveRun?: (taskId: string) => boolean;
 }
@@ -32,6 +34,7 @@ export const useAgentEvents = ({
   onDeleteFile,
   onUpsertFile,
   onSetPreviewUrl,
+  onRefreshPreview,
   isActiveRun,
 }: UseAgentEventsProps) => {
   const { runs, addAction, updateAction, appendActionLog, setRunStatus } = useRuns();
@@ -97,6 +100,11 @@ export const useAgentEvents = ({
         addAction(event.task_id, startAction);
         // If tools are starting without exec gating, the run is actively streaming
         setRunStatus(event.task_id, 'streaming');
+
+        // Auto-refresh previews when commands start running
+        if (toolCall.function.name === 'sandbox_run') {
+          onRefreshPreview?.();
+        }
         break;
       }
 
@@ -251,6 +259,23 @@ export const useAgentEvents = ({
             if (info?.url) onSetPreviewUrl?.(info.url);
           }
         }
+
+        // Trigger a refresh of any preview if file ops or runs may have changed served assets
+        {
+          const name = toolCall.function.name;
+          if (
+            name === 'edit_code' ||
+            name === 'create_file' ||
+            name === 'delete_file' ||
+            name === 'rename_file' ||
+            name === 'create_folder' ||
+            name === 'delete_folder' ||
+            name === 'rename_folder' ||
+            name === 'sandbox_run'
+          ) {
+            onRefreshPreview?.();
+          }
+        }
         break;
       }
 
@@ -382,6 +407,7 @@ export const useAgentEvents = ({
     onDeleteFile,
     onUpsertFile,
     onSetPreviewUrl,
+    onRefreshPreview,
     appendActionLog,
     addAction,
     updateAction,

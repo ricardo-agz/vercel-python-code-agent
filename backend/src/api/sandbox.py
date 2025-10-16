@@ -511,3 +511,32 @@ async def stop_play_delete(
     except Exception as e:
         return {"ok": False, "error": str(e)}
     return {"ok": True, "stopped": True}
+
+
+@router.get("/probe")
+async def probe_url(url: str) -> dict[str, Any]:
+    """Server-side URL probe.
+
+    Attempts a HEAD request first to avoid downloading the body.
+    Some servers do not support HEAD; in that case, fall back to a
+    streamed GET to obtain only the status code.
+    """
+    import httpx
+
+    status_code: int | None = None
+    try:
+        async with httpx.AsyncClient(follow_redirects=True, timeout=8.0) as client:
+            try:
+                resp = await client.request("HEAD", url)
+                status_code = int(resp.status_code)
+            except Exception:
+                # Fall back to a minimal GET (streamed, do not read body)
+                try:
+                    async with client.stream("GET", url) as resp2:
+                        status_code = int(resp2.status_code)
+                except Exception:
+                    status_code = None
+    except Exception:
+        status_code = None
+
+    return {"ok": status_code is not None, "status": status_code}

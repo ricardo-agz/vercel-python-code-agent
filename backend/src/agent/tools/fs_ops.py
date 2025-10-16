@@ -2,6 +2,7 @@ import json
 
 from agents import function_tool, RunContextWrapper
 from src.agent.context import IDEContext
+from src.sandbox.utils import autosync_after_fs_change
 
 
 @function_tool
@@ -36,11 +37,16 @@ async def create_file(
         output = {"error": f"File already exists: {file_path}", "file_path": file_path}
     else:
         ctx.context.project[file_path] = str(content)
+        # best-effort autosync to running sandboxes
         output = {
             "file_path": file_path,
             "new_file_content": str(content),
             "created": True,
         }
+        try:
+            await autosync_after_fs_change(ctx, created_or_updated=[file_path])
+        except Exception:
+            pass
 
     ctx.context.events.append(
         {
@@ -80,7 +86,12 @@ async def delete_file(ctx: RunContextWrapper[IDEContext], file_path: str) -> str
     else:
         # delete the file
         del ctx.context.project[file_path]
+        # best-effort autosync to running sandboxes
         output = {"file_path": file_path, "deleted": True}
+        try:
+            await autosync_after_fs_change(ctx, deleted_files=[file_path])
+        except Exception:
+            pass
 
     ctx.context.events.append(
         {
@@ -135,12 +146,19 @@ async def rename_file(
         else:
             ctx.context.project[new_path] = content
         del ctx.context.project[old_path]
+        # best-effort autosync to running sandboxes
         output = {
             "old_path": old_path,
             "new_path": new_path,
             "renamed": True,
             **({"overwritten": True} if overwritten else {}),
         }
+        try:
+            await autosync_after_fs_change(
+                ctx, created_or_updated=[new_path], deleted_files=[old_path]
+            )
+        except Exception:
+            pass
 
     ctx.context.events.append(
         {
@@ -222,15 +240,24 @@ async def delete_folder(ctx: RunContextWrapper[IDEContext], folder_path: str) ->
 
     normalized = folder_path.rstrip("/")
     removed = 0
+    removed_paths: list[str] = []
     remaining: dict[str, str] = {}
     for path, content in ctx.context.project.items():
         if path == normalized or path.startswith(normalized + "/"):
             removed += 1
+            removed_paths.append(path)
             continue
         remaining[path] = content
     ctx.context.project = remaining
 
+    # best-effort autosync to running sandboxes
     output = {"folder_path": folder_path, "deleted": True, "removed_files": removed}
+    try:
+        await autosync_after_fs_change(
+            ctx, deleted_files=removed_paths, deleted_dirs=[normalized]
+        )
+    except Exception:
+        pass
 
     ctx.context.events.append(
         {
@@ -274,22 +301,36 @@ async def rename_folder(
     new_norm = new_path.rstrip("/")
     moved = 0
     next_project: dict[str, str] = {}
+    deleted_paths: list[str] = []
+    created_paths: list[str] = []
     for path, content in ctx.context.project.items():
         if path == old_norm or path.startswith(old_norm + "/"):
             suffix = path[len(old_norm) :]
             new_file_path = (new_norm + suffix).lstrip("/")
             next_project[new_file_path] = content
             moved += 1
+            deleted_paths.append(path)
+            created_paths.append(new_file_path)
         else:
             next_project[path] = content
     ctx.context.project = next_project
 
+    # best-effort autosync to running sandboxes
     output = {
         "old_path": old_path,
         "new_path": new_path,
         "renamed": True,
         "moved_files": moved,
     }
+    try:
+        await autosync_after_fs_change(
+            ctx,
+            created_or_updated=created_paths,
+            deleted_files=deleted_paths,
+            deleted_dirs=[old_norm],
+        )
+    except Exception:
+        pass
 
     ctx.context.events.append(
         {

@@ -1,6 +1,9 @@
+"use client";
+
+const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:8000';
+
 async function fetchApi() {
-  const baseUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
-  const res = await fetch(`${baseUrl}/`, { cache: "no-store" });
+  const res = await fetch(`${API_BASE}/`, { cache: "no-store" });
   if (!res.ok) {
     throw new Error(`Failed to fetch API: ${res.status}`);
   }
@@ -8,8 +11,7 @@ async function fetchApi() {
 }
 
 async function fetchItems() {
-  const baseUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
-  const res = await fetch(`${baseUrl}/items`, { cache: "no-store" });
+  const res = await fetch(`${API_BASE}/items`, { cache: "no-store" });
   if (!res.ok) {
     return [] as { id: number; name: string; price: number; description?: string }[];
   }

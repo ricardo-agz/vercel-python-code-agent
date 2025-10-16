@@ -44,3 +44,27 @@ async def update_run_project(run_id: str, project: dict[str, str]) -> None:
             updated,
             {"ttl": _TTL_SECONDS, "tags": [f"run:{run_id}"]},
         )
+
+
+# Per-user active sandbox mappings (name -> sandbox_id)
+
+def _user_sbx_key(user_id: str) -> str:
+    return f"user:{user_id}:sandboxes"
+
+
+async def get_user_sandboxes(user_id: str) -> dict[str, str]:
+    val = await cache.get(_user_sbx_key(user_id))
+    return dict(val) if isinstance(val, dict) else {}
+
+
+async def upsert_user_sandbox(user_id: str, name: str, sandbox_id: str) -> None:
+    cur = await get_user_sandboxes(user_id)
+    cur[name] = sandbox_id
+    await cache.set(_user_sbx_key(user_id), cur, {"ttl": _TTL_SECONDS})
+
+
+async def remove_user_sandbox(user_id: str, name: str) -> None:
+    cur = await get_user_sandboxes(user_id)
+    if name in cur:
+        cur.pop(name, None)
+        await cache.set(_user_sbx_key(user_id), cur, {"ttl": _TTL_SECONDS})

@@ -17,6 +17,11 @@ How to work
 - Use create_file() to add new files, and rename_file()/rename_folder() to move things. Use delete_* sparingly and only when clearly safe.
 - Ask for request_code_execution() to run or preview the project when runtime feedback is needed; include what will be executed and what success looks like in your surrounding message.
 
+Automatic sandbox sync (important)
+- After any successful file operation (create_file, delete_file, rename_file, rename_folder, delete_folder) or edit_code, changes are automatically synced to all existing sandboxes.
+- If a dev server with file watching is running in a sandbox (e.g., vite/next dev, uvicorn --reload, Rails reloader), the preview updates automatically.
+- sandbox_run still performs a full sync before executing commands; autosync covers subsequent edits.
+
 Running commands and servers (critical)
 - Use sandbox_run for shell commands.
  - Prefer single-command pipelines over multiple sequential runs: chain steps with `&&` in one sandbox_run (e.g., `pip install -r requirements.txt && python main.py`). Split into multiple runs only if a pipeline fails and you need to retry specific steps.

@@ -3,14 +3,15 @@ from typing import Any
 
 from agents import function_tool, RunContextWrapper
 from src.agent.context import IDEContext
+from src.sandbox.utils import autosync_after_fs_change
 
 
 @function_tool
 async def think(ctx: RunContextWrapper[IDEContext], thoughts: str) -> str:
     """Record a concise plan for the current task.
 
-    Use this before non-trivial changes to outline intent (3–7 short bullets).
-    Keep it brief and high-signal; do not include secrets or sensitive data.
+    Use this before non-trivial changes to outline intent (1-3 sentences).
+    Keep it brief and high-signal; do not include secrets, urls, or sensitive data.
 
     Args:
         thoughts: Short plan or reasoning to log.
@@ -125,6 +126,13 @@ async def edit_code(
                 "file_path": file_path,
                 "new_file_content": output["new_code"],
             }
+            # best-effort autosync to running sandboxes
+            try:
+                await autosync_after_fs_change(
+                    ctx, created_or_updated=[file_path]
+                )
+            except Exception:
+                pass
     ctx.context.events.append(
         {
             "phase": "completed",

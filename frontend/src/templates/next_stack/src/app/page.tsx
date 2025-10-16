@@ -1,12 +1,14 @@
 'use client';
 import React from 'react';
 
+const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:8000';
+
 function useStatus() {
   const [ping, setPing] = React.useState('pending');
   const [health, setHealth] = React.useState('pending');
   React.useEffect(() => {
-    fetch('/ping').then(r => r.json()).then(d => setPing(d?.message || JSON.stringify(d))).catch(() => setPing('error'));
-    fetch('/health').then(r => r.json()).then(d => setHealth(d?.status || JSON.stringify(d))).catch(() => setHealth('error'));
+    fetch(`${API_BASE}/ping`).then(r => r.json()).then(d => setPing(d?.message || JSON.stringify(d))).catch((err) => setPing(`error: ${err.message}`));
+    fetch(`${API_BASE}/health`).then(r => r.json()).then(d => setHealth(d?.status || JSON.stringify(d))).catch((err) => setHealth(`error: ${err.message}`));
   }, []);
   return { ping, health } as const;
 }

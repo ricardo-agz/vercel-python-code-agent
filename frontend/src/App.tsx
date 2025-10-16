@@ -749,6 +749,9 @@ function App() {
       // (The hook exposes setPreviewUrl for this purpose)
       (play as unknown as { setPreviewUrl?: (u: string | null) => void }).setPreviewUrl?.(url);
     },
+    onRefreshPreview: () => {
+      setPreviewRefreshToken((t) => t + 1);
+    },
     isActiveRun,
   });
   const stream = useAgentStream({ onMessage: handleAgentEvent });
@@ -764,6 +767,9 @@ function App() {
       latestRunStatus === 'waiting_exec'
     )
   );
+
+  // Token to force refresh of preview iframes
+  const [previewRefreshToken, setPreviewRefreshToken] = useState<number>(0);
 
   // Initialize chat functionality
   const { sendPrompt, cancelCurrentTask } = useChat({
@@ -1353,6 +1359,7 @@ function App() {
               actions={timelineActions}
               isEmpty={timelineActions.length === 0}
               loading={isThinking}
+            refreshToken={previewRefreshToken}
               onOpenFile={(path) => {
                 const normalized = (path || '').replace(/^\//,'');
                 if (!normalized) return;

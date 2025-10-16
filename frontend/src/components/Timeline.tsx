@@ -1,7 +1,8 @@
 import React from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { MessageSquare, Loader, Box, Code2, Cpu, Gem, ExternalLink, Settings } from 'lucide-react';
+import { MessageSquare, Loader, Box, ExternalLink, Settings, RefreshCcw } from 'lucide-react';
+import { SiPython, SiNodedotjs, SiGo, SiRuby } from 'react-icons/si';
 import type { Action, ExecResultAction } from '../types/run';
 
 interface TimelineProps {
@@ -9,9 +10,10 @@ interface TimelineProps {
   isEmpty: boolean;
   loading: boolean;
   onOpenFile?: (path: string) => void;
+  refreshToken?: number;
 }
 
-export const Timeline: React.FC<TimelineProps> = ({ actions, isEmpty, loading, onOpenFile }) => {
+export const Timeline: React.FC<TimelineProps> = ({ actions, isEmpty, loading, onOpenFile, refreshToken }) => {
   const [expanded, setExpanded] = React.useState<Record<string, boolean>>({});
 
   const toggle = (id: string) => setExpanded(prev => ({ ...prev, [id]: !prev[id] }));
@@ -123,16 +125,17 @@ export const Timeline: React.FC<TimelineProps> = ({ actions, isEmpty, loading, o
                 }
                 if (action.toolName === 'sandbox_show_preview' && res?.url) {
                   const origin = (() => { try { return new URL(res.url).host; } catch { return res.url; } })();
+                  const previewLabel = (res as unknown as { label?: string; name?: string })?.label || (res as unknown as { label?: string; name?: string })?.name;
                   return (
-                    <PreviewCard key={key} url={res.url} origin={origin} />
+                    <PreviewCard key={key} url={res.url} origin={origin} contextLabel={previewLabel} refreshToken={refreshToken} />
                   );
                 }
                 if (action.toolName === 'sandbox_run') {
-                  const args = (action as unknown as { arguments?: { command?: string; cwd?: string } }).arguments;
+                  const args = (action as unknown as { arguments?: { command?: string; cwd?: string; name?: string } }).arguments;
                   const status: 'running' | 'done' | 'failed' = typeof res?.exit_code === 'number' ? (res.exit_code === 0 ? 'done' : 'failed') : 'done';
                   return (
                     <div key={key} className="mr-4">
-                      <MiniTerminal command={args?.command || ''} cwd={args?.cwd} status={status} output={((action as unknown as { logs?: string }).logs || '')} />
+                      <MiniTerminal command={args?.command || ''} cwd={args?.cwd} status={status} output={((action as unknown as { logs?: string }).logs || '')} sandboxName={args?.name} />
                     </div>
                   );
                 }
@@ -228,10 +231,10 @@ export const Timeline: React.FC<TimelineProps> = ({ actions, isEmpty, loading, o
               }
               case 'tool_started':
                 if ((action as unknown as { toolName?: string }).toolName === 'sandbox_run') {
-                  const args = (action as unknown as { arguments?: { command?: string; cwd?: string } }).arguments;
+                  const args = (action as unknown as { arguments?: { command?: string; cwd?: string; name?: string } }).arguments;
                   return (
                     <div key={key} className="mr-4">
-                      <MiniTerminal command={args?.command || ''} cwd={args?.cwd} status="running" output={((action as unknown as { logs?: string }).logs || '')} />
+                      <MiniTerminal command={args?.command || ''} cwd={args?.cwd} status="running" output={((action as unknown as { logs?: string }).logs || '')} sandboxName={args?.name} />
                     </div>
                   );
                 }
@@ -290,9 +293,18 @@ export const Timeline: React.FC<TimelineProps> = ({ actions, isEmpty, loading, o
 };
 
 
+const getRuntimeIcon = (runtime: string) => {
+  const lower = (runtime || '').toLowerCase();
+  if (lower.startsWith('node')) return SiNodedotjs;
+  if (lower.startsWith('python')) return SiPython;
+  if (lower.startsWith('go')) return SiGo;
+  if (lower.startsWith('ruby')) return SiRuby;
+  return Box;
+};
+
 const RuntimePill: React.FC<{ runtime: string }> = ({ runtime }) => {
   const lower = (runtime || '').toLowerCase();
-  const Icon = lower.startsWith('node') ? Code2 : lower.startsWith('python') ? Cpu : lower.startsWith('ruby') ? Gem : Box;
+  const Icon = getRuntimeIcon(runtime);
   const label = lower || 'auto';
   return (
     <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-sm" style={{ background: 'var(--vscode-surface)', color: 'var(--vscode-text)', border: '1px solid var(--vscode-panel-border)' }}>
@@ -302,27 +314,86 @@ const RuntimePill: React.FC<{ runtime: string }> = ({ runtime }) => {
   );
 };
 
-const PreviewCard: React.FC<{ url: string; origin: string }> = ({ url, origin }) => {
+const PreviewCard: React.FC<{ url: string; origin: string; contextLabel?: string; refreshToken?: number }> = ({ url, origin, contextLabel, refreshToken }) => {
   const [collapsed, setCollapsed] = React.useState(false);
+  const [reloadCount, setReloadCount] = React.useState(0);
+  const [timedOut, setTimedOut] = React.useState(false);
+
+  // Ping the preview endpoint to detect sandbox timeouts (410)
+  React.useEffect(() => {
+    let aborted = false;
+    const doProbe = async () => {
+      try {
+        // Prefer probing a health/ping endpoint when we can infer it
+        let target = url;
+        try {
+          const u = new URL(url);
+          target = `${u.origin}/ping`;
+        } catch {
+          // ignore URL parse errors and use raw url
+        }
+        const resp = await fetch(`/api/play/probe?url=${encodeURIComponent(target)}`);
+        if (!aborted && resp.ok) {
+          const data = await resp.json();
+          const status = (data?.status as number | undefined) ?? null;
+          if (status === 410) {
+            setTimedOut(true);
+            setCollapsed(true);
+          }
+        }
+      } catch {
+        // ignore network errors; keep current UI
+      }
+    };
+    doProbe();
+    return () => { aborted = true; };
+  }, [url, refreshToken]);
+
+  React.useEffect(() => {
+    if (typeof refreshToken !== 'undefined') {
+      setReloadCount(c => c + 1);
+    }
+  }, [refreshToken]);
   return (
     <div className="text-xs">
       <div className="mb-1" style={{ color: 'var(--vscode-subtle)' }}>Preview</div>
       <div style={{ border: '1px solid var(--vscode-panel-border)', borderRadius: 6, overflow: 'hidden', backgroundColor: 'var(--vscode-panel)' }}>
         <div className="flex items-center justify-between px-2 py-1" style={{ background: 'var(--vscode-surface)', borderBottom: '1px solid var(--vscode-panel-border)' }}>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 min-w-0">
             <span style={{ display: 'inline-block', width: 10, height: 10, borderRadius: 9999, background: '#ff5f57' }} />
             <button onClick={() => setCollapsed(v => !v)} title="Minimize" style={{ width: 10, height: 10, borderRadius: 9999, background: '#ffbd2e', border: 0, padding: 0 }} />
             <a href={url} title="Open in new tab" target="_blank" rel="noreferrer" style={{ width: 10, height: 10, borderRadius: 9999, background: '#28c840', display: 'inline-block' }} />
-            <div className="ml-2 text-ellipsis overflow-hidden whitespace-nowrap" style={{ color: 'var(--vscode-text)', maxWidth: 200 }}>
-              {origin}
+            <div className="ml-2 flex items-center gap-2 min-w-0" style={{ color: 'var(--vscode-text)' }}>
+              <button
+                type="button"
+                onClick={() => setReloadCount(c => c + 1)}
+                className="p-1 rounded hover:bg-opacity-10 hover:bg-white transition-colors"
+                title="Refresh preview"
+                aria-label="Refresh preview"
+                style={{ color: 'var(--vscode-accent)' }}
+              >
+                <RefreshCcw className="w-3.5 h-3.5" />
+              </button>
+              <span className="overflow-hidden text-ellipsis whitespace-nowrap" style={{ maxWidth: 200 }}>{origin}</span>
+              {contextLabel ? (
+                <span className="px-1 py-0.5 rounded-sm" style={{ border: '1px solid var(--vscode-panel-border)', color: 'var(--vscode-subtle)', whiteSpace: 'nowrap' }}>{contextLabel}</span>
+              ) : null}
+              {timedOut ? (
+                <span className="px-1 py-0.5 rounded-sm" style={{ border: '1px solid var(--vscode-panel-border)', color: 'var(--vscode-subtle)', whiteSpace: 'nowrap' }}>Sandbox timed out</span>
+              ) : null}
             </div>
           </div>
           <a href={url} target="_blank" rel="noreferrer" className="p-1 rounded hover:bg-opacity-10 hover:bg-white transition-colors" style={{ color: 'var(--vscode-accent)' }} title="Open in new tab">
             <ExternalLink className="w-4 h-4" />
           </a>
         </div>
-        {!collapsed && (
-          <iframe src={url} title="Preview" style={{ width: '100%', height: 220, border: 'none', background: '#ffffff', colorScheme: 'light' }} />
+        {!collapsed && !timedOut && (
+          <iframe key={`iframe-${reloadCount}`} src={url} title="Preview" style={{ width: '100%', height: 220, border: 'none', background: '#ffffff', colorScheme: 'light' }} />
+        )}
+        {(!collapsed && timedOut) && (
+          <div className="p-3 text-xs" style={{ color: 'var(--vscode-subtle)', background: 'var(--vscode-panel)' }}>
+            Sandbox timed out
+          </div>
         )}
       </div>
     </div>
@@ -335,7 +406,8 @@ const MiniTerminal: React.FC<{
   cwd?: string;
   status: 'running' | 'done' | 'failed';
   output?: string;
-}> = ({ command, cwd, status, output }) => {
+  sandboxName?: string;
+}> = ({ command, cwd, status, output, sandboxName }) => {
   const [open, setOpen] = React.useState(false);
   const scrollRef = React.useRef<HTMLPreElement | null>(null);
   const tailText = React.useMemo(() => {
@@ -357,6 +429,9 @@ const MiniTerminal: React.FC<{
         <div className="flex items-center gap-2">
           <span style={{ display: 'inline-block', width: 10, height: 10, borderRadius: 9999, background: status === 'failed' ? '#ff5f57' : status === 'done' ? '#28c840' : '#ffbd2e' }} />
           <span style={{ color: 'var(--vscode-subtle)' }}>{cwd ? `${cwd} $` : '$'}</span>
+          {sandboxName ? (
+            <span className="ml-2 px-1 py-0.5 rounded-sm" style={{ border: '1px solid var(--vscode-panel-border)', color: 'var(--vscode-subtle)' }}>{sandboxName}</span>
+          ) : null}
         </div>
         <button onClick={() => setOpen(v => !v)} className="px-2 py-0.5 rounded-sm" style={{ background: 'var(--vscode-surface)', color: 'var(--vscode-text)', border: '1px solid var(--vscode-panel-border)' }}>
           {open ? 'Hide output' : 'Show output'}
