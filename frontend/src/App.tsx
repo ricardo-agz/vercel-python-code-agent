@@ -22,8 +22,21 @@ import { CodeFixModal } from './components/CodeFixModal';
 import ProjectTabs, { type ProjectTab } from './components/ProjectTabs';
 import NewProjectModal from './components/NewProjectModal';
 import { getTemplateById, getStackById, TEMPLATES } from './templates/index';
-import { loadPersistedState, savePersistedState, type PersistedState, type PersistedProjectState } from './lib/persistence';
-import { getProjectChatThreads, setCurrentChatThread, startNewChatThread, upsertCurrentChatThread, mergeThreadIntoRuns, upsertThreadById, deleteChatThread, type PersistedChatThread, MAX_THREADS_PER_PROJECT } from './lib/persistence';
+import {
+  loadPersistedState,
+  savePersistedState,
+  type PersistedState,
+  type PersistedProjectState,
+  getProjectChatThreads,
+  setCurrentChatThread,
+  startNewChatThread,
+  upsertCurrentChatThread,
+  mergeThreadIntoRuns,
+  upsertThreadById,
+  deleteChatThread,
+  type PersistedChatThread,
+  MAX_THREADS_PER_PROJECT,
+} from './lib/persistence.ts';
 import { History as HistoryIcon, Plus, X } from 'lucide-react';
 
 type ResizableCenterProps = {
