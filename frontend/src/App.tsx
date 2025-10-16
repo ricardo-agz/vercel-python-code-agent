@@ -188,7 +188,7 @@ function App() {
   const [projects, setProjects] = useState<ProjectTab[]>(() => (persisted?.projects?.length ? persisted.projects : [{ id: initialProjectId, name: 'Project 1' }]));
   const [activeProjectId, setActiveProjectId] = useState<string>(() => {
     const candidate = persisted?.activeProjectId || initialProjectId;
-    const exists = (persisted?.projects || [{ id: initialProjectId, name: 'Project 1' }]).some(p => p.id === candidate);
+    const exists = (persisted?.projects || [{ id: initialProjectId, name: 'Project 1' }]).some((p: { id: string }) => p.id === candidate);
     return exists ? candidate : (persisted?.projects?.[0]?.id || initialProjectId);
   });
   const [showNewProject, setShowNewProject] = useState<boolean>(false);
@@ -1349,7 +1349,7 @@ function App() {
                                 if (activeThreadId === t.id) {
                                   const fallback = nextList[0]?.id || `${activeProjectId}_default`;
                                   setActiveThreadId(fallback);
-                                  const chosen = nextList.find(x => x.id === fallback);
+                                  const chosen = nextList.find((x: { id: string }) => x.id === fallback);
                                   if (chosen) {
                                     const { runs: scopedRuns, order } = mergeThreadIntoRuns(activeProjectId, chosen);
                                     mergeProjectRuns(activeProjectId, scopedRuns, order, chosen.id);
