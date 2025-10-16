@@ -21,9 +21,8 @@ if not logger.handlers:
 app = FastAPI()
 
 is_prod = (
-    (os.getenv("NODE_ENV") or os.getenv("ENV") or "development").lower()
-    == "production"
-)
+    os.getenv("NODE_ENV") or os.getenv("ENV") or "development"
+).lower() == "production"
 
 app.add_middleware(
     CORSMiddleware,

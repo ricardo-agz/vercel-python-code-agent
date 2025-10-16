@@ -81,7 +81,11 @@ export function useAgentStream({ onMessage }: UseAgentStreamProps) {
     }
   }, []);
 
-  return { connect, resume, disconnect } as const;
+  const isConnected = useCallback((runId: string) => {
+    return Boolean(sourcesRef.current[runId]);
+  }, []);
+
+  return { connect, resume, disconnect, isConnected } as const;
 }
 
 

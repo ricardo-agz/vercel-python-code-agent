@@ -14,7 +14,6 @@ from src.agent.tools import (
     create_folder,
     delete_folder,
     rename_folder,
-    request_code_execution,
     sandbox_create,
     sandbox_stop,
     sandbox_run,
@@ -28,13 +27,14 @@ from src.sse import (
     tool_started_sse,
     tool_completed_sse,
 )
+from src.run_store import update_run_project
 from src.agent.utils import build_project_input, make_ignore_predicate
 
 
 logger = logging.getLogger("ide_agent.agent")
 
 
-ALLOWED_TURNS = 50
+ALLOWED_TURNS = 100
 SLEEP_INTERVAL_SECONDS = 0.05
 
 
@@ -52,7 +52,8 @@ def create_ide_agent(model: str | None = None) -> Agent:
         "name": "IDE Agent",
         "instructions": instructions,
         "tools": [
-            # think,
+            think,
+            # fs ops
             edit_code,
             create_file,
             delete_file,
@@ -60,8 +61,7 @@ def create_ide_agent(model: str | None = None) -> Agent:
             create_folder,
             delete_folder,
             rename_folder,
-            request_code_execution,
-            # Sandbox controls
+            # sandbox controls
             sandbox_create,
             sandbox_stop,
             sandbox_run,
@@ -125,6 +125,17 @@ async def run_agent_flow(
     )
 
     context = IDEContext(project=filtered_project, base_payload=base_payload)
+    # Keep run store in sync with filtered project so resume tokens remain small
+    try:
+        import asyncio
+
+        coro = update_run_project(task_id, filtered_project)
+        if asyncio.get_event_loop().is_running():
+            asyncio.create_task(coro)
+        else:
+            asyncio.run(coro)
+    except Exception:
+        pass
 
     selected_model = payload.get("model")
     agent_instance = create_ide_agent(selected_model) if selected_model else ide_agent
@@ -259,9 +270,13 @@ async def resume_agent_flow(
 
     history = base.get("message_history", [])
     assistant_only = [
-        m["content"] for m in history if m.get("role") == "assistant" and m.get("content")
+        m["content"]
+        for m in history
+        if m.get("role") == "assistant" and m.get("content")
     ]
-    input_text = build_project_input(base["query"], filtered_project, history or assistant_only)
+    input_text = build_project_input(
+        base["query"], filtered_project, history or assistant_only
+    )
 
     selected_model = base.get("model")
     agent_instance = create_ide_agent(selected_model) if selected_model else ide_agent

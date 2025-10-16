@@ -3,6 +3,7 @@ import time
 from typing import Any
 
 from src.auth import make_stream_token
+from src.run_store import update_run_project
 
 
 SSE_HEADERS: dict[str, str] = {
@@ -57,19 +58,24 @@ def tool_completed_sse(
 ) -> str:
     output_data: Any = ev.get("output_data")
     if ev.get("name") == "request_code_execution" and isinstance(output_data, dict):
-        token_payload = {
-            "user_id": base_payload["user_id"],
-            "message_history": base_payload.get("message_history", []),
-            "query": base_payload["query"],
-            "project": project,
-            # Preserve model selection for resume flows if present
-            **(
-                {"model": base_payload.get("model")}
-                if base_payload.get("model")
-                else {}
-            ),
+        # Keep the store up-to-date with the latest project snapshot used by the agent
+        try:
+            # fire-and-forget update; ignore if running outside async loop
+            import asyncio
+
+            coro = update_run_project(task_id, project)
+            if asyncio.get_event_loop().is_running():
+                asyncio.create_task(coro)
+            else:
+                # fallback if called in sync context
+                asyncio.run(coro)
+        except Exception:
+            pass
+        # Issue a compact resume token that only carries the run id
+        output_data = {
+            **output_data,
+            "resume_token": make_stream_token({"run_id": task_id}),
         }
-        output_data = {**output_data, "resume_token": make_stream_token(token_payload)}
 
     return sse_format(
         emit_event(

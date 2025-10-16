@@ -1,12 +1,13 @@
-import { useCallback } from 'react';
+import { useCallback, useRef, useEffect } from 'react';
 import type { AgentEvent } from '../types';
 import { useRuns } from '../context/RunContext';
 import type { Action } from '../types/run';
 
 interface UseAgentEventsProps {
   setLoading: (loading: boolean) => void;
-  setCurrentTaskId: (taskId: string | null) => void;
   setCancelling: (cancelling: boolean) => void;
+  // Allow updating UI state for background runs by project id
+  setLoadingForProject?: (projectId: string, loading: boolean) => void;
   upsertProposal: (filePath: string, newContent: string) => void;
   onCreateFolder?: (folderPath: string) => void;
   onDeleteFolder?: (folderPath: string) => void;
@@ -15,12 +16,16 @@ interface UseAgentEventsProps {
   onDeleteFile?: (filePath: string) => void;
   onUpsertFile?: (filePath: string, content: string) => void;
   onSetPreviewUrl?: (url: string | null) => void;
+  // Signal that any live previews should refresh (e.g., iframe reload)
+  onRefreshPreview?: () => void;
+  // Only affect UI states when the event belongs to the active run
+  isActiveRun?: (taskId: string) => boolean;
 }
 
 export const useAgentEvents = ({
   setLoading,
-  setCurrentTaskId,
   setCancelling,
+  setLoadingForProject,
   upsertProposal,
   onCreateFolder,
   onDeleteFolder,
@@ -29,8 +34,12 @@ export const useAgentEvents = ({
   onDeleteFile,
   onUpsertFile,
   onSetPreviewUrl,
+  onRefreshPreview,
+  isActiveRun,
 }: UseAgentEventsProps) => {
-  const { runs, addAction, updateAction, appendActionLog } = useRuns();
+  const { runs, addAction, updateAction, appendActionLog, setRunStatus } = useRuns();
+  const runsRef = useRef(runs);
+  useEffect(() => { runsRef.current = runs; }, [runs]);
 
   const handleEvent = useCallback((event: AgentEvent) => {
     switch (event.event_type) {
@@ -52,8 +61,8 @@ export const useAgentEvents = ({
 
         // If this is a code execution request we've already resolved (failed/done), ignore repeats
         if (toolCall.function.name === 'request_code_execution') {
-          const existing = runs[event.task_id]?.actions.find((a) => a.id === toolCall.id && a.kind === 'exec_request');
-          const someOtherExecExists = runs[event.task_id]?.actions.some((a) => a.kind === 'exec_request' && a.id !== toolCall.id);
+          const existing = runsRef.current[event.task_id]?.actions.find((a) => a.id === toolCall.id && a.kind === 'exec_request');
+          const someOtherExecExists = runsRef.current[event.task_id]?.actions.some((a) => a.kind === 'exec_request' && a.id !== toolCall.id);
           // Allow at most one exec request per run; ignore any new/different ones
           if (someOtherExecExists) break;
           if (existing && existing.status !== 'running') break;
@@ -75,6 +84,8 @@ export const useAgentEvents = ({
               ...(responseOnReject ? { responseOnReject } : { responseOnReject: toolCall.function.arguments?.response_on_reject }),
             } as Action;
           });
+          // Enter waiting state for execution approval
+          setRunStatus(event.task_id, 'waiting_exec');
           break;
         }
 
@@ -87,6 +98,13 @@ export const useAgentEvents = ({
           arguments: toolCall.function.arguments,
         } as Action;
         addAction(event.task_id, startAction);
+        // If tools are starting without exec gating, the run is actively streaming
+        setRunStatus(event.task_id, 'streaming');
+
+        // Auto-refresh previews when commands start running
+        if (toolCall.function.name === 'sandbox_run') {
+          onRefreshPreview?.();
+        }
         break;
       }
 
@@ -122,10 +140,10 @@ export const useAgentEvents = ({
         }
 
         if (toolCall.function.name === 'request_code_execution') {
-          const someOtherExecExists = runs[event.task_id]?.actions.some((a) => a.kind === 'exec_request' && a.id !== toolCall.id);
+          const someOtherExecExists = runsRef.current[event.task_id]?.actions.some((a) => a.kind === 'exec_request' && a.id !== toolCall.id);
           if (someOtherExecExists) break;
           // If user already resolved this exec request, ignore duplicates that would re-open the prompt
-          const existing = runs[event.task_id]?.actions.find((a) => a.id === toolCall.id && a.kind === 'exec_request');
+          const existing = runsRef.current[event.task_id]?.actions.find((a) => a.id === toolCall.id && a.kind === 'exec_request');
           if (existing && existing.status !== 'running') break;
 
           const resumeToken = resp.output_data?.resume_token as string | undefined;
@@ -241,6 +259,23 @@ export const useAgentEvents = ({
             if (info?.url) onSetPreviewUrl?.(info.url);
           }
         }
+
+        // Trigger a refresh of any preview if file ops or runs may have changed served assets
+        {
+          const name = toolCall.function.name;
+          if (
+            name === 'edit_code' ||
+            name === 'create_file' ||
+            name === 'delete_file' ||
+            name === 'rename_file' ||
+            name === 'create_folder' ||
+            name === 'delete_folder' ||
+            name === 'rename_folder' ||
+            name === 'sandbox_run'
+          ) {
+            onRefreshPreview?.();
+          }
+        }
         break;
       }
 
@@ -272,17 +307,24 @@ export const useAgentEvents = ({
           timestamp: event.timestamp,
         } as Action;
         addAction(event.task_id, answerAction);
+        setRunStatus(event.task_id, 'done');
         // Clear any lingering running actions (e.g., exec_request) so UI hides modals/spinners
-        const run = runs[event.task_id];
+        const run = runsRef.current[event.task_id];
         if (run) {
           for (const a of run.actions) {
             if (a.status === 'running') {
               updateAction(event.task_id, a.id, (prev) => ({ ...(prev as Action), status: 'done' }) as Action);
             }
           }
+          // Ensure background thread/project UI clears loading
+          if (run.projectId) {
+            setLoadingForProject?.(run.projectId, false);
+          }
         }
-        setLoading(false);
-        setCurrentTaskId(null);
+        // Also clear active UI if this run is currently active
+        if (!isActiveRun || isActiveRun(event.task_id)) {
+          setLoading(false);
+        }
         break;
       }
 
@@ -295,9 +337,25 @@ export const useAgentEvents = ({
           timestamp: event.timestamp,
         } as Action;
         addAction(event.task_id, notice);
-        setLoading(false);
-        setCancelling(false);
-        setCurrentTaskId(null);
+        setRunStatus(event.task_id, 'cancelled');
+        // Clear any lingering running actions so UI hides loaders
+        {
+          const run = runsRef.current[event.task_id];
+          if (run) {
+            for (const a of run.actions) {
+              if (a.status === 'running') {
+                updateAction(event.task_id, a.id, (prev) => ({ ...(prev as Action), status: 'done' }) as Action);
+              }
+            }
+            if (run.projectId) {
+              setLoadingForProject?.(run.projectId, false);
+            }
+          }
+        }
+        if (!isActiveRun || isActiveRun(event.task_id)) {
+          setLoading(false);
+          setCancelling(false);
+        }
         break;
       }
 
@@ -311,9 +369,25 @@ export const useAgentEvents = ({
           timestamp: event.timestamp,
         } as Action;
         addAction(event.task_id, notice);
-        setLoading(false);
-        setCancelling(false);
-        setCurrentTaskId(null);
+        setRunStatus(event.task_id, 'failed');
+        // Mark any running actions as failed to avoid stale spinners
+        {
+          const run = runsRef.current[event.task_id];
+          if (run) {
+            for (const a of run.actions) {
+              if (a.status === 'running') {
+                updateAction(event.task_id, a.id, (prev) => ({ ...(prev as Action), status: 'failed' }) as Action);
+              }
+            }
+            if (run.projectId) {
+              setLoadingForProject?.(run.projectId, false);
+            }
+          }
+        }
+        if (!isActiveRun || isActiveRun(event.task_id)) {
+          setLoading(false);
+          setCancelling(false);
+        }
         break;
       }
 
@@ -323,8 +397,8 @@ export const useAgentEvents = ({
     }
   }, [
     setLoading,
-    setCurrentTaskId,
     setCancelling,
+    setLoadingForProject,
     upsertProposal,
     onCreateFolder,
     onDeleteFolder,
@@ -333,10 +407,13 @@ export const useAgentEvents = ({
     onDeleteFile,
     onUpsertFile,
     onSetPreviewUrl,
+    onRefreshPreview,
     appendActionLog,
     addAction,
     updateAction,
-    runs,
+    isActiveRun,
+    setRunStatus,
+    // Deliberately exclude runs; use runsRef to avoid stale closures
   ]);
 
   return handleEvent;

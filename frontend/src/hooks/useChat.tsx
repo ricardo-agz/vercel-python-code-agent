@@ -7,13 +7,13 @@ import { API_BASE } from '../constants';
 interface UseChatProps {
   userId: string;
   input: string;
-  currentTaskId: string | null;
   cancelling: boolean;
   project: Record<string, string>;
   proposals?: Record<string, string>;
+  projectId: string;
+  threadId: string;
   setInput: (input: string) => void;
   setLoading: (loading: boolean) => void;
-  setCurrentTaskId: (taskId: string | null) => void;
   setCancelling: (cancelling: boolean) => void;
   stream: { connect: (runId: string, streamToken: string) => void; resume: (runId: string, resumeToken: string, result: string) => void; disconnect: (runId: string) => void };
   model: string;
@@ -22,19 +22,19 @@ interface UseChatProps {
 export const useChat = ({
   userId,
   input,
-  currentTaskId,
   cancelling,
   project,
   proposals,
+  projectId,
+  threadId,
   setInput,
   setLoading,
-  setCurrentTaskId,
   setCancelling,
   stream,
   model,
 }: UseChatProps) => {
   const { isAuthenticated, openModal } = useAuth();
-  const { runs, runOrder, createRun, addAction, updateAction } = useRuns();
+  const { runs, runOrder, createRun, addAction, updateAction, setRunStatus } = useRuns();
   const sendPrompt = useCallback(async () => {
     if (!input.trim()) return;
     if (!isAuthenticated) {
@@ -48,6 +48,8 @@ export const useChat = ({
     const message_history = runOrder.flatMap((id) => {
       const run = runs[id];
       if (!run) return [] as { role: string; content: string }[];
+      if (run.projectId !== projectId) return [] as { role: string; content: string }[];
+      if (run.threadId !== threadId) return [] as { role: string; content: string }[];
       const messages: { role: string; content: string }[] = [];
       for (const a of run.actions) {
         if (a.kind === 'user_message') messages.push({ role: 'user', content: (a as Action & { content: string }).content });
@@ -76,8 +78,7 @@ export const useChat = ({
 
     if (res.ok) {
       const { task_id, stream_token } = await res.json();
-      createRun(task_id, input);
-      setCurrentTaskId(task_id);
+      createRun(task_id, input, projectId, threadId);
 
       // store user message action
       const userAction: Action = {
@@ -91,39 +92,43 @@ export const useChat = ({
 
       // Open SSE stream for this task; events are handled globally by useAgentStream → useAgentEvents
       stream.connect(task_id, stream_token);
+      // Mark run as actively streaming (latest run will be treated as active in UI)
+      setRunStatus(task_id, 'streaming');
     } else {
       console.error('enqueue failed');
       setLoading(false);
     }
-  }, [input, isAuthenticated, openModal, userId, project, proposals, setInput, setLoading, createRun, addAction, setCurrentTaskId, runs, runOrder, stream, model]);
+  }, [input, isAuthenticated, openModal, userId, project, proposals, projectId, threadId, setInput, setLoading, createRun, addAction, runs, runOrder, stream, model, setRunStatus]);
 
-  const cancelCurrentTask = useCallback(() => {
-    if (!currentTaskId || cancelling) return;
+  const cancelCurrentTask = useCallback((taskId?: string) => {
+    const targetId = taskId;
+    if (!targetId || cancelling) return;
     setCancelling(true);
     // Stop the SSE stream first
-    stream.disconnect(currentTaskId);
+    stream.disconnect(targetId);
     // Mark any running actions as done to hide loaders
-    const run = runs[currentTaskId];
+    const run = runs[targetId];
     if (run) {
       for (const a of run.actions) {
         if (a.status === 'running') {
-          updateAction(currentTaskId, a.id, (prev) => ({ ...(prev as Action), status: 'done' }) as Action);
+          updateAction(targetId, a.id, (prev) => ({ ...(prev as Action), status: 'done' }) as Action);
         }
       }
     }
     // Add a system notice
-    addAction(currentTaskId, {
+    addAction(targetId, {
       id: `cancel_${Date.now()}`,
       kind: 'system_notice',
       status: 'done',
       message: 'Task was cancelled.',
       timestamp: new Date().toISOString(),
     } as Action);
+    // Update run status to cancelled
+    setRunStatus(targetId, 'cancelled');
     // Clear UI state
     setCancelling(false);
     setLoading(false);
-    setCurrentTaskId(null);
-  }, [currentTaskId, cancelling, setCancelling, setLoading, setCurrentTaskId, stream, addAction, runs, updateAction]);
+  }, [cancelling, setCancelling, setLoading, stream, addAction, runs, updateAction, setRunStatus]);
 
   return {
     sendPrompt,
