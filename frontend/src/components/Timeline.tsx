@@ -106,6 +106,10 @@ export const Timeline: React.FC<TimelineProps> = ({ actions, isEmpty, loading, o
                   removed_files?: number;
                   moved_files?: number;
                 } | undefined;
+                // Suppress generic completion line for 'think' tool; the actual thought is rendered via 'assistant_thought'
+                if (action.toolName === 'think') {
+                  return null;
+                }
                 if (action.toolName === 'sandbox_create') {
                   const info = (res as unknown as { runtime?: string; sandbox_id?: string; synthetic_runtime?: boolean; effective_runtime?: string }) || {};
                   const runtime = info?.runtime || (action as unknown as { arguments?: { runtime?: string } }).arguments?.runtime || 'auto';
@@ -242,6 +246,10 @@ export const Timeline: React.FC<TimelineProps> = ({ actions, isEmpty, loading, o
                       <span>sandbox</span>
                     </div>
                   );
+                }
+                // Suppress generic running line for 'think' tool; we'll show only the thought content
+                if ((action as unknown as { toolName?: string }).toolName === 'think') {
+                  return null;
                 }
                 return (<div key={key} className="text-xs" style={{ color: 'var(--vscode-subtle)' }}>Running {action.toolName}...</div>);
               case 'assistant_thought':

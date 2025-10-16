@@ -1386,7 +1386,7 @@ function App() {
               onCancel={handleCancelTask}
               cancelling={cancelling}
               suggestions={(() => {
-                if (timelineActions.length > 0) return undefined;
+                if (timelineActions.length > 0 || activeState.loading) return undefined;
                 const tid = (projectStates[activeProjectId]?.templateId || defaultTemplateId);
                 const tmpl = getTemplateById(tid) || getStackById(tid);
                 const list = (tmpl?.suggestions && tmpl.suggestions.length > 0)

@@ -47,7 +47,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
   return (
     <div className="p-4" style={{ borderTop: '1px solid var(--vscode-panel-border)', background: 'var(--vscode-sidebar)' }}>
       {/* Suggestions list - only when empty and not sending */}
-      {(!value.trim() && !sendDisabled && (suggestions?.length || 0) > 0) ? (
+      {(!value.trim() && (suggestions?.length || 0) > 0) ? (
         <div className="mb-3">
           <div className="text-xs mb-2" style={{ color: 'var(--vscode-muted)' }}>Click and try one of these prompts:</div>
           <div className="flex flex-wrap gap-2">
