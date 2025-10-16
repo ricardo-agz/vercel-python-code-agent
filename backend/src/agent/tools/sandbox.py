@@ -2,6 +2,7 @@ import json
 import asyncio
 import time
 
+import httpx
 from vercel.sandbox import AsyncSandbox as Sandbox
 from agents import function_tool, RunContextWrapper
 
@@ -620,13 +621,17 @@ async def sandbox_show_preview(
     name: str | None = None,
 ) -> str:
     """Emit a preview URL for the active sandbox so the UI can render it.
+    Automatically makes a curl request to verify the URL is accessible.
+    Make sure to preview a route that contains a real endpoint. For example, 
+    if you are previewing a backend that doesn not have anything at the root but
+    it has an endpoint at /api/hello, you should preview /api/hello.
 
     Args:
         url: The full preview URL.
         port: Optional port used by the service.
         label: Optional descriptive label (e.g., 'frontend', 'backend').
     Returns:
-        JSON with preview info.
+        JSON with preview info and curl response details.
     """
     tool_id = f"tc_{len(ctx.context.events) + 1}"
     sb_name = normalize_sandbox_name(ctx, name)
@@ -639,11 +644,75 @@ async def sandbox_show_preview(
             "arguments": args,
         }
     )
+    
+    # Make HTTP request to verify the preview URL
+    curl_result = {}
+    try:
+        async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as client:
+            response = await client.get(url)
+            curl_result = {
+                "status_code": response.status_code,
+                "status": "success" if 200 <= response.status_code < 300 else "error",
+                "headers": dict(response.headers),
+                "content": response.text[:5000] if response.text else None,  # Limit content to 5000 chars
+                "content_type": response.headers.get("content-type", ""),
+            }
+            
+            # Log the curl result to the events
+            ctx.context.events.append(
+                {
+                    "phase": "log",
+                    "tool_id": tool_id,
+                    "name": "sandbox_show_preview",
+                    "data": f"[{sb_name}] Preview health check: HTTP {response.status_code} for {url}\n",
+                }
+            )
+    except httpx.TimeoutException:
+        curl_result = {
+            "status": "timeout",
+            "error": "Request timed out after 10 seconds"
+        }
+        ctx.context.events.append(
+            {
+                "phase": "log",
+                "tool_id": tool_id,
+                "name": "sandbox_show_preview",
+                "data": f"[{sb_name}] Preview health check: TIMEOUT for {url}\n",
+            }
+        )
+    except httpx.ConnectError as e:
+        curl_result = {
+            "status": "connection_error",
+            "error": f"Connection failed: {str(e)}"
+        }
+        ctx.context.events.append(
+            {
+                "phase": "log",
+                "tool_id": tool_id,
+                "name": "sandbox_show_preview",
+                "data": f"[{sb_name}] Preview health check: CONNECTION ERROR for {url}\n",
+            }
+        )
+    except Exception as e:
+        curl_result = {
+            "status": "error",
+            "error": f"Unexpected error: {str(e)}"
+        }
+        ctx.context.events.append(
+            {
+                "phase": "log",
+                "tool_id": tool_id,
+                "name": "sandbox_show_preview",
+                "data": f"[{sb_name}] Preview health check: ERROR - {str(e)}\n",
+            }
+        )
+    
     output = {
         "url": url,
         **({"port": port} if port else {}),
         **({"label": label} if label else {}),
         "name": sb_name,
+        "curl_result": curl_result,
     }
     ctx.context.events.append(
         {

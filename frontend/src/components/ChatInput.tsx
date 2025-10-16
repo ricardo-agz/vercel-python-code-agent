@@ -24,12 +24,16 @@ export const ChatInput: React.FC<ChatInputProps> = ({
   suggestions,
 }) => {
   const textareaRef = React.useRef<HTMLTextAreaElement>(null);
+  const MAX_TEXTAREA_HEIGHT = window.innerHeight / 2;
 
   const adjustTextareaHeight = React.useCallback(() => {
     const el = textareaRef.current;
     if (el) {
       el.style.height = 'auto';
-      el.style.height = `${el.scrollHeight}px`;
+      const nextHeight = Math.min(el.scrollHeight, MAX_TEXTAREA_HEIGHT);
+      el.style.height = `${nextHeight}px`;
+      // Allow the textarea to scroll internally once it reaches the cap
+      el.style.overflowY = el.scrollHeight > MAX_TEXTAREA_HEIGHT ? 'auto' : 'hidden';
     }
   }, []);
 
@@ -96,7 +100,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
             color: 'var(--vscode-text)',
             fontFamily: 'system-ui, -apple-system, sans-serif',
             fontSize: '14px',
-            overflow: 'hidden',
+            maxHeight: `${MAX_TEXTAREA_HEIGHT}px`,
           }}
         />
         {!sendDisabled && (

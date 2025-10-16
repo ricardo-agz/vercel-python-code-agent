@@ -1,6 +1,6 @@
 import React from 'react';
 import Editor, { DiffEditor, useMonaco } from '@monaco-editor/react';
-import { Play, Square, ExternalLink, ChevronLeft, ChevronRight } from 'lucide-react';
+import { ChevronLeft, ChevronRight } from 'lucide-react';
 import type * as monaco from 'monaco-editor';
 
 type DiffEditorRef = monaco.editor.IStandaloneDiffEditor | null;
@@ -12,11 +12,6 @@ interface EditorPaneProps {
   onAcceptProposal: (newContent: string) => void;
   onRejectProposal: () => void;
   fileName?: string;
-  onRun?: () => void;
-  onStop?: () => void;
-  running?: boolean;
-  previewUrl?: string | null;
-  onOpenPreview?: () => void;
   onStatusChange?: (status: { line: number; column: number; language: string }) => void;
   // Triggered when user presses Cmd/Ctrl+K with a non-empty selection
   onRequestCodeFix?: (args: { fileName: string; startLine: number; endLine: number; selectedCode: string }) => void;
@@ -33,11 +28,6 @@ export const EditorPane: React.FC<EditorPaneProps> = ({
   onAcceptProposal,
   onRejectProposal,
   fileName = 'main.js',
-  onRun,
-  onStop,
-  running = false,
-  previewUrl = null,
-  onOpenPreview,
   onStatusChange,
   onRequestCodeFix,
   proposedFiles,
@@ -236,37 +226,7 @@ export const EditorPane: React.FC<EditorPaneProps> = ({
     };
   }, [imageSrc, proposedImageSrc]);
 
-  const showRunButton = React.useMemo(() => {
-    return language === 'javascript' || language === 'typescript' || language === 'python';
-  }, [language]);
 
-  // Detect probable entrypoint types for nicer UX
-  const entrypointKind = React.useMemo<
-    | 'fastapi'
-    | 'generic'
-    | null
-  >(() => {
-    if (!fileName) return null;
-    const name = fileName.toLowerCase();
-    // Only consider runnable languages
-    if (!showRunButton) return null;
-
-    // FastAPI heuristic: common names and FastAPI imports or uvicorn run block
-    if (name.endsWith('.py')) {
-      const content = code || '';
-      const likelyFastApi = /from\s+fastapi\s+import\s+fastapi|import\s+fastapi/i.test(content) || /uvicorn\.run\(/i.test(content) || /fastapi\s*\(/i.test(content);
-      const commonEntrypointName = /(^|\/)main\.py$|(^|\/)app\.py$|(^|\/)server\.py$/i.test(name);
-      if (likelyFastApi || commonEntrypointName) return 'fastapi';
-      return 'generic';
-    }
-
-    // JS/TS entrypoints (generic)
-    if (name.endsWith('.js') || name.endsWith('.jsx') || name.endsWith('.ts') || name.endsWith('.tsx')) {
-      return 'generic';
-    }
-
-    return null;
-  }, [fileName, code, showRunButton]);
 
   // Notify status when language changes
   React.useEffect(() => {
@@ -297,47 +257,6 @@ export const EditorPane: React.FC<EditorPaneProps> = ({
     <div className="flex-1 flex flex-col" style={{ width: '100%' }}>
       <div className="px-3 flex items-center justify-between" style={{ backgroundColor: 'var(--vscode-panel)', borderBottom: '1px solid var(--vscode-panel-border)', height: 'var(--header-height)' }}>
         <div className="text-sm font-medium m-0" style={{ color: 'var(--vscode-text)' }}>{fileName}</div>
-        {showRunButton && (
-          <div className="flex items-center gap-2">
-            {previewUrl && (
-              <button
-                onClick={() => { if (onOpenPreview) onOpenPreview(); }}
-                title="Open Preview"
-                className="px-2 py-1 rounded-sm cursor-pointer flex items-center gap-1 text-sm"
-                style={{ background: 'var(--vscode-surface)', color: 'var(--vscode-text)' }}
-              >
-                <ExternalLink className="w-4 h-4" />
-                <span>Open</span>
-              </button>
-            )}
-            {running ? (
-              <button
-                onClick={() => { if (onStop) onStop(); }}
-                title="Stop"
-                className="px-2 py-1 rounded-sm cursor-pointer flex items-center gap-1 text-sm"
-                style={{ background: 'var(--vscode-danger)', color: '#ffffff' }}
-              >
-                <Square className="w-4 h-4" />
-                <span>Stop</span>
-              </button>
-            ) : (
-              <button
-                onClick={() => { if (onRun) onRun(); }}
-                title="Run"
-                className={`px-2 py-1 rounded-sm disabled:opacity-60 disabled:cursor-not-allowed cursor-pointer flex items-center gap-1 text-sm ${entrypointKind === 'fastapi' ? 'shimmer' : ''}`}
-                style={
-                  entrypointKind === 'fastapi'
-                    ? { background: 'var(--vscode-accent)', color: '#ffffff' }
-                    : { background: 'transparent', color: 'var(--vscode-accent)', border: '1px solid var(--vscode-accent)' }
-                }
-                disabled={!showRunButton}
-              >
-                <Play className="w-4 h-4" />
-                <span>Run</span>
-              </button>
-            )}
-          </div>
-        )}
       </div>
       <div className="flex-1 min-h-0 overflow-hidden relative">
         {isImage ? (

@@ -46,18 +46,13 @@ type ResizableCenterProps = {
   clearProposal: (file: string) => void;
   activeFile: string;
   onSelectFile: (path: string) => void;
-  onRun: () => void;
-  running: boolean;
-  onStop: () => void;
-  previewUrl?: string | null;
-  onOpenPreview?: () => void;
   terminalLogs: string;
   onClearLogs: () => void;
   onRequestCodeFix?: (args: { fileName: string; startLine: number; endLine: number; selectedCode: string }) => void;
   isIgnored?: (path: string) => boolean;
 };
 
-const ResizableCenter: React.FC<ResizableCenterProps> = ({ code, setCode, proposals, clearProposal, activeFile, onSelectFile, onRun, running, onStop, previewUrl, onOpenPreview, terminalLogs, onClearLogs, onRequestCodeFix, isIgnored }) => {
+const ResizableCenter: React.FC<ResizableCenterProps> = ({ code, setCode, proposals, clearProposal, activeFile, onSelectFile, terminalLogs, onClearLogs, onRequestCodeFix, isIgnored }) => {
   const containerRef = React.useRef<HTMLDivElement>(null);
   const [terminalHeight, setTerminalHeight] = React.useState<number>(200);
   const [resizing, setResizing] = React.useState<boolean>(false);
@@ -113,11 +108,6 @@ const ResizableCenter: React.FC<ResizableCenterProps> = ({ code, setCode, propos
           }}
           onRejectProposal={() => clearProposal(activeFile)}
           fileName={activeFile}
-          onRun={onRun}
-          onStop={onStop}
-          running={running}
-          previewUrl={previewUrl}
-          onOpenPreview={onOpenPreview}
           onStatusChange={setStatus}
           onRequestCodeFix={onRequestCodeFix}
           proposedFiles={React.useMemo(() => {
@@ -822,23 +812,6 @@ function App() {
       }
     };
   }, [codeFix, setInput, isThinking, isAuthenticated, openModal, sendPrompt, setCodeFix]);
-  const handleRun = React.useCallback(() => {
-    const merged: Record<string, string> = { ...project };
-    // If a proposal exists for active file and is visible, prefer current editor content via code state
-    merged[activeFile] = code;
-    const filtered: Record<string, string> = {};
-    for (const [p, c] of Object.entries(merged)) {
-      // Always keep entry file and ignore control files
-      if (p === activeFile || p === '.gitignore' || p === '.agentignore' || !isPathIgnored(p)) {
-        filtered[p] = c;
-      }
-    }
-    play.start({ userId: USER_ID, project: filtered, entryPath: activeFile });
-  }, [project, activeFile, code, play, isPathIgnored]);
-
-  const handleStop = React.useCallback(() => {
-    play.stop();
-  }, [play]);
 
 
 
@@ -1272,11 +1245,6 @@ function App() {
             clearProposal={clearProposal}
             activeFile={activeFile}
             onSelectFile={setActiveFile}
-            onRun={handleRun}
-            running={Boolean(play.sandboxId) && (play.status === 'running' || play.status === 'starting')}
-            onStop={handleStop}
-            previewUrl={play.previewUrl}
-            onOpenPreview={play.openPreview}
             terminalLogs={play.logs}
             onClearLogs={play.clear}
             isIgnored={isPathIgnored}

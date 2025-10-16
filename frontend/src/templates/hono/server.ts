@@ -1,6 +1,10 @@
 import { Hono } from 'hono'
+import { serve } from '@hono/node-server'
+import { cors } from 'hono/cors'
 
 const app = new Hono()
+
+app.use('*', cors())
 
 app.get('/health', (c) => c.json({ status: 'ok', service: 'hono' }))
 app.get('/ping', (c) => c.json({ message: 'pong' }))
@@ -25,6 +29,6 @@ app.delete('/todos/:id', (c) => {
   return c.json({ deleted })
 })
 
-export default app
-
-
+const port = Number(process.env.PORT) || 3000
+serve({ fetch: app.fetch, port, hostname: '0.0.0.0' })
+console.log(`Server is running on http://0.0.0.0:${port}`)
