@@ -2,19 +2,9 @@ import { useCallback, useRef, useEffect } from 'react';
 import type { AgentEvent } from '../types';
 import { useRuns } from '../context/RunContext';
 import type { Action } from '../types/run';
+import { useProjects } from '../context/ProjectsContext';
 
 interface UseAgentEventsProps {
-  setLoading: (loading: boolean) => void;
-  setCancelling: (cancelling: boolean) => void;
-  // Allow updating UI state for background runs by project id
-  setLoadingForProject?: (projectId: string, loading: boolean) => void;
-  upsertProposal: (filePath: string, newContent: string) => void;
-  onCreateFolder?: (folderPath: string) => void;
-  onDeleteFolder?: (folderPath: string) => void;
-  onRenameFolder?: (oldPath: string, newPath: string) => void;
-  onRenameFile?: (oldPath: string, newPath: string) => void;
-  onDeleteFile?: (filePath: string) => void;
-  onUpsertFile?: (filePath: string, content: string) => void;
   onSetPreviewUrl?: (url: string | null) => void;
   // Signal that any live previews should refresh (e.g., iframe reload)
   onRefreshPreview?: () => void;
@@ -23,20 +13,22 @@ interface UseAgentEventsProps {
 }
 
 export const useAgentEvents = ({
-  setLoading,
-  setCancelling,
-  setLoadingForProject,
-  upsertProposal,
-  onCreateFolder,
-  onDeleteFolder,
-  onRenameFolder,
-  onRenameFile,
-  onDeleteFile,
-  onUpsertFile,
   onSetPreviewUrl,
   onRefreshPreview,
   isActiveRun,
 }: UseAgentEventsProps) => {
+  const {
+    upsertProposal,
+    createFolder,
+    deleteFolder,
+    renameFolder,
+    renameFile,
+    deleteFile,
+    upsertFileIfMissing,
+    setLoading,
+    setCancelling,
+    setLoadingForProject,
+  } = useProjects();
   const { runs, addAction, updateAction, appendActionLog, setRunStatus } = useRuns();
   const runsRef = useRef(runs);
   useEffect(() => { runsRef.current = runs; }, [runs]);
@@ -124,19 +116,19 @@ export const useAgentEvents = ({
         }
 
         if (toolCall.function.name === 'create_folder' && resp.output_data?.created && resp.output_data?.folder_path) {
-          onCreateFolder?.((resp.output_data.folder_path as string).replace(/^\//,''));
+          createFolder((resp.output_data.folder_path as string).replace(/^\//,''));
         }
         if (toolCall.function.name === 'delete_folder' && resp.output_data?.deleted && resp.output_data?.folder_path) {
-          onDeleteFolder?.((resp.output_data.folder_path as string).replace(/\/$/,''));
+          deleteFolder((resp.output_data.folder_path as string).replace(/\/$/,''));
         }
         if (toolCall.function.name === 'rename_folder' && resp.output_data?.renamed && resp.output_data?.old_path && resp.output_data?.new_path) {
-          onRenameFolder?.(resp.output_data.old_path as string, resp.output_data.new_path as string);
+          renameFolder(resp.output_data.old_path as string, resp.output_data.new_path as string);
         }
         if (toolCall.function.name === 'rename_file' && resp.output_data?.renamed && resp.output_data?.old_path && resp.output_data?.new_path) {
-          onRenameFile?.(resp.output_data.old_path as string, resp.output_data.new_path as string);
+          renameFile(resp.output_data.old_path as string, resp.output_data.new_path as string);
         }
         if (toolCall.function.name === 'delete_file' && resp.output_data?.deleted && resp.output_data?.file_path) {
-          onDeleteFile?.(resp.output_data.file_path as string);
+          deleteFile(resp.output_data.file_path as string);
         }
 
         if (toolCall.function.name === 'request_code_execution') {
@@ -216,7 +208,7 @@ export const useAgentEvents = ({
               // Ensure all created files are present in the project tree immediately
               created.forEach((p) => {
                 if (!p) return;
-                onUpsertFile?.(p, '');
+                upsertFileIfMissing(p, '');
               });
 
               // Decode provided file contents and surface as proposals
@@ -400,12 +392,12 @@ export const useAgentEvents = ({
     setCancelling,
     setLoadingForProject,
     upsertProposal,
-    onCreateFolder,
-    onDeleteFolder,
-    onRenameFolder,
-    onRenameFile,
-    onDeleteFile,
-    onUpsertFile,
+    createFolder,
+    deleteFolder,
+    renameFolder,
+    renameFile,
+    deleteFile,
+    upsertFileIfMissing,
     onSetPreviewUrl,
     onRefreshPreview,
     appendActionLog,
@@ -413,7 +405,6 @@ export const useAgentEvents = ({
     updateAction,
     isActiveRun,
     setRunStatus,
-    // Deliberately exclude runs; use runsRef to avoid stale closures
   ]);
 
   return handleEvent;

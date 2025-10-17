@@ -1,5 +1,5 @@
 import React from 'react';
-import { API_BASE } from '../constants';
+import { API_BASE } from '../../constants';
 
 interface ModelsResponse { models?: string[]; error?: string }
 
