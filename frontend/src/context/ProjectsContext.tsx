@@ -19,6 +19,7 @@ type ProjectState = {
   activeThreadId: string | null;
   templateId: string;
   sandbox: SandboxState;
+  autoSyncing?: boolean;
 };
 
 type ProjectsContextValue = {
@@ -91,6 +92,9 @@ type ProjectsContextValue = {
 
   // sandbox extras
   sandboxLastData?: Record<string, string>;
+  // auto sync state
+  autoSyncing: boolean;
+  setAutoSyncing: (v: boolean) => void;
 };
 
 const ProjectsContext = React.createContext<ProjectsContextValue | null>(null);
@@ -188,6 +192,7 @@ export const ProjectsProvider: React.FC<{ children: React.ReactNode }> = ({ chil
             activeThreadId: null,
             templateId: defaultTemplateId,
             sandbox: {},
+            autoSyncing: false,
           };
         }
       }
@@ -207,6 +212,7 @@ export const ProjectsProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         activeThreadId: null,
         templateId: defaultTemplateId,
         sandbox: {},
+        autoSyncing: false,
       },
     } as Record<string, ProjectState>;
     return initial;
@@ -316,6 +322,10 @@ export const ProjectsProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 
   const setActiveThreadId = React.useCallback((threadId: string | null) => {
     setProjectStates(prev => ({ ...prev, [activeProjectId]: { ...prev[activeProjectId], activeThreadId: threadId } }));
+  }, [activeProjectId]);
+
+  const setAutoSyncing = React.useCallback((v: boolean) => {
+    setProjectStates(prev => ({ ...prev, [activeProjectId]: { ...prev[activeProjectId], autoSyncing: v } }));
   }, [activeProjectId]);
 
   const setCode = React.useCallback((next: string) => {
@@ -822,6 +832,8 @@ export const ProjectsProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     activeThreadId: activeState.activeThreadId,
     setActiveThreadId,
     sandboxLastData: activeState.sandbox?.lastData,
+    autoSyncing: Boolean(activeState.autoSyncing),
+    setAutoSyncing,
   };
 
   return (

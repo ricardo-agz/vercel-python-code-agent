@@ -41,11 +41,24 @@ export const EditorPane: React.FC<EditorPaneProps> = ({
   const diffEditorRef = React.useRef<DiffEditorRef>(null);
   const editorRef = React.useRef<monaco.editor.IStandaloneCodeEditor | null>(null);
   const monacoInstance = useMonaco();
-  const { sandboxStatus, project, proposals, activeProjectId, setLastEditorSync, setLastSandboxSeen } = useProjects();
+  const { sandboxStatus, project, proposals, activeProjectId, setLastEditorSync, setLastSandboxSeen, setAutoSyncing, hasSandboxBaseline, editorAheadPaths } = useProjects() as unknown as {
+    sandboxStatus: { editorAhead: number; sandboxAhead: number; diverged: number };
+    project: Record<string, string>;
+    proposals: Record<string, string>;
+    activeProjectId: string;
+    setLastEditorSync: (s: { at: string; fileHashes: Record<string, string> }) => void;
+    setLastSandboxSeen: (s: { at: string; fileHashes: Record<string, string> }) => void;
+    setAutoSyncing: (v: boolean) => void;
+    hasSandboxBaseline: boolean;
+    editorAheadPaths: string[];
+  };
   const { isAuthenticated, openModal } = useAuth();
   const isOutOfSync = (sandboxStatus.editorAhead + sandboxStatus.sandboxAhead + sandboxStatus.diverged) > 0;
 
   const [syncing, setSyncing] = React.useState<boolean>(false);
+  const lastSyncAtRef = React.useRef<number>(0);
+  const debounceTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+  const autoSyncBlockedUntilRef = React.useRef<number>(0);
 
   const handleImmediateSync = React.useCallback(async () => {
     if (!isAuthenticated) { openModal(); return; }
@@ -78,6 +91,73 @@ export const EditorPane: React.FC<EditorPaneProps> = ({
       setSyncing(false);
     }
   }, [isAuthenticated, openModal, project, proposals, activeProjectId, setLastEditorSync, setLastSandboxSeen, syncing]);
+
+  // Debounced auto-sync on edits
+  React.useEffect(() => {
+    // Preconditions: auth, baseline exists, only editor ahead, no diverge or sandbox ahead
+    const shouldAuto = isAuthenticated
+      && hasSandboxBaseline
+      && sandboxStatus.editorAhead > 0
+      && sandboxStatus.diverged === 0
+      && sandboxStatus.sandboxAhead === 0
+      && Date.now() > (autoSyncBlockedUntilRef.current || 0);
+    if (!shouldAuto) return;
+
+    // Throttle: at most once every 4s; Debounce: 1.2s trailing.
+    // Schedule the timer to satisfy BOTH (i.e., the larger of debounce or remaining throttle).
+    const now = Date.now();
+    const since = now - (lastSyncAtRef.current || 0);
+    const throttleRemaining = (lastSyncAtRef.current ? Math.max(0, 4000 - since) : 0);
+    const delayMs = Math.max(1200, throttleRemaining);
+    if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
+    debounceTimerRef.current = setTimeout(async () => {
+      if (!isAuthenticated) return;
+      // Safety: recompute throttle check at fire time
+      const elapsed = Date.now() - (lastSyncAtRef.current || 0);
+      if (lastSyncAtRef.current && elapsed < 4000) return;
+      if (syncing) return;
+      try {
+        setAutoSyncing(true);
+        setSyncing(true);
+        // Only send subset for changed files
+        const changed = Array.isArray(editorAheadPaths) && editorAheadPaths.length > 0 ? editorAheadPaths : Object.keys(project);
+        const merged: Record<string, string> = {};
+        for (const p of changed) {
+          const v = (proposals && proposals[p] !== undefined) ? (proposals[p] as string) : (project[p] as string);
+          if (v !== undefined) merged[p] = v as string;
+        }
+        const userId: string = getUserId();
+        const resp = await fetch(`${API_BASE}/play/sync`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ user_id: userId, project: merged, project_id: activeProjectId }),
+        });
+        const data = await resp.json().catch(() => ({ ok: false }));
+        if (resp.ok && data && data.ok) {
+          lastSyncAtRef.current = Date.now();
+          const hashes = computeProjectHashes({ ...project, ...(proposals || {}) });
+          const nowISO = new Date().toISOString();
+          setLastEditorSync({ at: nowISO, fileHashes: hashes });
+          setLastSandboxSeen({ at: nowISO, fileHashes: hashes });
+        } else if (resp.status === 404 || (data && (data.detail || data.error))) {
+          const msg = String(data?.detail || data?.error || '').toLowerCase();
+          if (resp.status === 404 || msg.includes('no sandboxes mapped')) {
+            // Back off auto-sync attempts for a while to avoid loops when sandbox is gone/expired
+            autoSyncBlockedUntilRef.current = Date.now() + 60_000; // 60s backoff
+          }
+        }
+      } catch {
+        // ignore
+      } finally {
+        setSyncing(false);
+        setAutoSyncing(false);
+      }
+    }, delayMs);
+
+    return () => {
+      if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
+    };
+  }, [project, proposals, sandboxStatus.editorAhead, sandboxStatus.diverged, sandboxStatus.sandboxAhead, isAuthenticated, hasSandboxBaseline, activeProjectId, setLastEditorSync, setLastSandboxSeen, setAutoSyncing, syncing, editorAheadPaths]);
 
   // Create a Monaco theme that follows our CSS variables (Vercel dark)
   React.useEffect(() => {
@@ -299,7 +379,7 @@ export const EditorPane: React.FC<EditorPaneProps> = ({
     <div className="flex-1 flex flex-col" style={{ width: '100%' }}>
       <div className="px-3 flex items-center justify-between" style={{ backgroundColor: 'var(--vscode-panel)', borderBottom: '1px solid var(--vscode-panel-border)', height: 'var(--header-height)' }}>
         <div className="text-sm font-medium m-0" style={{ color: 'var(--vscode-text)' }}>{fileName}</div>
-        {isOutOfSync && (
+        {/* {isOutOfSync && (
           <button
             onClick={handleImmediateSync}
             className="px-2 py-1 rounded-sm text-xs cursor-pointer"
@@ -309,7 +389,7 @@ export const EditorPane: React.FC<EditorPaneProps> = ({
           >
             {syncing ? 'Syncing…' : 'Sync sandbox'}
           </button>
-        )}
+        )} */}
       </div>
       <div className="flex-1 min-h-0 overflow-hidden relative">
         {isImage ? (

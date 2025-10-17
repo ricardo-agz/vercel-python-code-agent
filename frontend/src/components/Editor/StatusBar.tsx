@@ -10,7 +10,7 @@ type StatusBarProps = {
 
 export const StatusBar: React.FC<StatusBarProps> = ({ line, column, language }) => {
   const { openModal, isAuthenticated, user, openAccountMenu } = useAuth();
-  const { sandboxStatus, markSyncOnNextRun, sandboxAheadPaths, divergedPaths, hasSandboxBaseline } = useProjects();
+  const { sandboxStatus, markSyncOnNextRun, sandboxAheadPaths, divergedPaths, hasSandboxBaseline, autoSyncing } = useProjects();
   const [panelOpen, setPanelOpen] = React.useState<boolean>(false);
 
   const prettyLanguage = React.useMemo(() => {
@@ -95,7 +95,7 @@ export const StatusBar: React.FC<StatusBarProps> = ({ line, column, language }) 
               style={{ background: 'var(--vscode-surface)', color: 'var(--vscode-text)', border: '1px solid var(--vscode-panel-border)' }}
               title="Sandbox sync"
             >
-              Sandbox out of sync
+              {autoSyncing ? 'Syncing…' : 'Sandbox out of sync'}
             </button>
           )}
           {panelOpen && (
@@ -112,6 +112,9 @@ export const StatusBar: React.FC<StatusBarProps> = ({ line, column, language }) 
                 >
                   Update Sandbox (next run)
                 </button>
+                <div className="text-xs" style={{ color: 'var(--vscode-muted)' }}>
+                  If auto-sync reports "no sandboxes mapped", run the code again to start a fresh sandbox.
+                </div>
                 {(sandboxAheadPaths.length + divergedPaths.length) > 0 && (
                   <div className="text-xs" style={{ color: 'var(--vscode-muted)' }}>
                     Pull Sandbox Changes will appear automatically after runs that include file data.
