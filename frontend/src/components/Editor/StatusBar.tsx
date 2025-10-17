@@ -1,5 +1,6 @@
 import React from 'react';
 import { useAuth } from '../../context/AuthContext';
+import { useProjects } from '../../context/ProjectsContext';
 
 type StatusBarProps = {
   line: number;
@@ -9,6 +10,8 @@ type StatusBarProps = {
 
 export const StatusBar: React.FC<StatusBarProps> = ({ line, column, language }) => {
   const { openModal, isAuthenticated, user, openAccountMenu } = useAuth();
+  const { sandboxStatus, markSyncOnNextRun, sandboxAheadPaths, divergedPaths, hasSandboxBaseline } = useProjects();
+  const [panelOpen, setPanelOpen] = React.useState<boolean>(false);
 
   const prettyLanguage = React.useMemo(() => {
     if (!language) return 'Plain Text';
@@ -83,6 +86,42 @@ export const StatusBar: React.FC<StatusBarProps> = ({ line, column, language }) 
             <path d="M37.59 0L75.18 65H0z" fill="#ffffff" />
           </svg>
         </button>
+        {hasSandboxBaseline && (
+        <div className="ml-2 relative">
+          {sandboxStatus.editorAhead + sandboxStatus.sandboxAhead + sandboxStatus.diverged > 0 && (
+            <button
+              onClick={() => setPanelOpen(v => !v)}
+              className="px-2 h-[var(--statusbar-height)] text-xs rounded-sm"
+              style={{ background: 'var(--vscode-surface)', color: 'var(--vscode-text)', border: '1px solid var(--vscode-panel-border)' }}
+              title="Sandbox sync"
+            >
+              Sandbox out of sync
+            </button>
+          )}
+          {panelOpen && (
+            <div className="absolute left-0 mt-1 p-2 rounded-sm z-10 min-w-[220px]" style={{ background: 'var(--vscode-panel)', border: '1px solid var(--vscode-panel-border)' }}>
+              <div className="text-xs mb-2" style={{ color: 'var(--vscode-text)' }}>
+                Editor ahead: {sandboxStatus.editorAhead} · Sandbox ahead: {sandboxStatus.sandboxAhead} · Diverged: {sandboxStatus.diverged}
+              </div>
+              <div className="flex flex-col gap-2">
+                <button
+                  onClick={() => { markSyncOnNextRun(); setPanelOpen(false); }}
+                  className="px-2 py-1 rounded-sm text-xs"
+                  style={{ background: 'var(--vscode-accent)', color: '#ffffff', border: '1px solid var(--vscode-panel-border)' }}
+                  title="Push editor changes to sandbox on next run"
+                >
+                  Update Sandbox (next run)
+                </button>
+                {(sandboxAheadPaths.length + divergedPaths.length) > 0 && (
+                  <div className="text-xs" style={{ color: 'var(--vscode-muted)' }}>
+                    Pull Sandbox Changes will appear automatically after runs that include file data.
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+        </div>
+        )}
       </div>
 
       <div className="flex items-center gap-4 mr-4">

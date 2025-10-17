@@ -20,7 +20,12 @@ from src.sandbox.utils import (
     snapshot_file_changes,
 )
 from src.sandbox.cache import SANDBOX_CACHE
-from src.run_store import upsert_user_sandbox, remove_user_sandbox
+from src.run_store import (
+    upsert_user_sandbox,
+    remove_user_sandbox,
+    upsert_user_project_sandbox,
+    remove_user_project_sandbox,
+)
 from src.sandbox.command import (
     select_safe_cwd,
     detect_language_usage,
@@ -169,19 +174,27 @@ async def sandbox_create(
     # Persist mapping per-user for cross-run autosync
     try:
         user_id = (ctx.context.base_payload or {}).get("user_id") or ""
+        project_id = (ctx.context.base_payload or {}).get("project_id") or ""
         if user_id:
             import asyncio as _asyncio
 
-            coro = upsert_user_sandbox(user_id, sb_name, sandbox.sandbox_id)
+            tasks = [upsert_user_sandbox(user_id, sb_name, sandbox.sandbox_id)]
+            if project_id:
+                tasks.append(upsert_user_project_sandbox(user_id, project_id, sb_name, sandbox.sandbox_id))
+            async def _run_all():
+                for c in tasks:
+                    try:
+                        await c
+                    except Exception:
+                        pass
             try:
                 loop = _asyncio.get_event_loop()
                 if loop.is_running():
-                    loop.create_task(coro)
+                    loop.create_task(_run_all())
                 else:
-                    loop.run_until_complete(coro)  # unlikely path
+                    loop.run_until_complete(_run_all())  # unlikely path
             except RuntimeError:
-                # When no loop, best-effort run
-                _asyncio.run(coro)
+                _asyncio.run(_run_all())
     except Exception:
         pass
     return json.dumps(output)
@@ -239,18 +252,27 @@ async def sandbox_stop(
     # Remove mapping from per-user store
     try:
         user_id = (ctx.context.base_payload or {}).get("user_id") or ""
+        project_id = (ctx.context.base_payload or {}).get("project_id") or ""
         if user_id and sb_name:
             import asyncio as _asyncio
 
-            coro = remove_user_sandbox(user_id, sb_name)
+            tasks = [remove_user_sandbox(user_id, sb_name)]
+            if project_id:
+                tasks.append(remove_user_project_sandbox(user_id, project_id, sb_name))
+            async def _run_all():
+                for c in tasks:
+                    try:
+                        await c
+                    except Exception:
+                        pass
             try:
                 loop = _asyncio.get_event_loop()
                 if loop.is_running():
-                    loop.create_task(coro)
+                    loop.create_task(_run_all())
                 else:
-                    loop.run_until_complete(coro)
+                    loop.run_until_complete(_run_all())
             except RuntimeError:
-                _asyncio.run(coro)
+                _asyncio.run(_run_all())
     except Exception:
         pass
     return json.dumps(output)

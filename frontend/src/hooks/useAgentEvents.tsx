@@ -3,6 +3,7 @@ import type { AgentEvent } from '../types';
 import { useRuns } from '../context/RunContext';
 import type { Action } from '../types/run';
 import { useProjects } from '../context/ProjectsContext';
+import { buildSandboxSnapshot } from '../lib/sandbox';
 
 interface UseAgentEventsProps {
   onSetPreviewUrl?: (url: string | null) => void;
@@ -28,6 +29,8 @@ export const useAgentEvents = ({
     setLoading,
     setCancelling,
     setLoadingForProject,
+    setLastSandboxSeen,
+    sandboxLastData,
   } = useProjects();
   const { runs, addAction, updateAction, appendActionLog, setRunStatus } = useRuns();
   const runsRef = useRef(runs);
@@ -203,6 +206,15 @@ export const useAgentEvents = ({
                 data?: Array<{ path: string; encoding?: string; content?: string }>;
               };
 
+              // If there are no filesystem changes and no sampled data, skip snapshot update
+              const hasChanges = Boolean(
+                (fs.created && fs.created.length) ||
+                (fs.updated && fs.updated.length) ||
+                (fs.deleted && fs.deleted.length) ||
+                (fs.data && fs.data.length)
+              );
+              if (!hasChanges) break;
+
               const created = new Set((fs.created || []).map(p => (p || '').replace(/^\.\//, '')));
 
               // Ensure all created files are present in the project tree immediately
@@ -212,21 +224,27 @@ export const useAgentEvents = ({
               });
 
               // Decode provided file contents and surface as proposals
-              const dec = new TextDecoder('utf-8');
               (fs.data || []).forEach((entry) => {
                 const p = (entry.path || '').replace(/^\.\//, '');
                 if (!p) return;
                 if (entry.encoding === 'base64' && typeof entry.content === 'string') {
                   try {
                     const bin = Uint8Array.from(atob(entry.content), c => c.charCodeAt(0));
-                    const text = dec.decode(bin);
-                    // Keep content as proposal; the actual project content is empty until user accepts
+                    const text = new TextDecoder('utf-8').decode(bin);
                     upsertProposal(p, text);
                   } catch {
                     // ignore decode errors
                   }
                 }
               });
+
+              // Update sandbox snapshot state (hashes + lastData)
+              try {
+                const { snapshot, lastData } = buildSandboxSnapshot(undefined, sandboxLastData, fs);
+                setLastSandboxSeen(snapshot, lastData);
+              } catch {
+                // ignore snapshot errors
+              }
 
               // For deleted files, we do not remove immediately; this can be shown as a timeline entry
               if ((fs.deleted || []).length > 0) {
@@ -405,6 +423,8 @@ export const useAgentEvents = ({
     updateAction,
     isActiveRun,
     setRunStatus,
+    setLastSandboxSeen,
+    sandboxLastData,
   ]);
 
   return handleEvent;

@@ -105,21 +105,26 @@ Running commands and servers
  - For DIFFERENT services or independent operations: use parallel tool calls
  - When you have several shell steps to execute in order, consider sandbox_run_pipeline which takes a list of commands and runs them as a single pipeline with `&&`.
 
+Hot reloading (CRITICAL - ALWAYS ENABLE)
+- **ALWAYS enable hot reloading/file watching for both frontend and backend servers whenever possible.** This is mandatory for development servers.
+- The automatic sandbox sync (see line 57) pushes file changes to running sandboxes, and hot reload picks them up automatically.
+
 Server run checklist (APIs/frontends/servers)
 1) CWD: After generating/scaffolding a project (rails new, create-react-app, vite, etc.), set cwd to the app directory (e.g., blog/, my-app/) for all subsequent commands (bundle/rails/npm/bun/yarn). Do not run them from the project root.
 2) Mode: Attached (detached: false) for one-shot tasks (installs/builds/tests). Detached (detached: true) only for servers with readiness.
 3) Readiness: Always provide ready_patterns and port (infer or set a sensible default if missing).
-4) Binding and env:
-   - Python: bind 0.0.0.0 and set port (e.g., uvicorn --host 0.0.0.0 --port 8000).
-   - Node: ensure server binds 0.0.0.0; pass -p/--port if applicable (e.g., next/vite/dev servers).
+4) **HOT RELOAD: ALWAYS enable hot reloading/auto-reload for development servers (see Hot reloading section above).**
+5) Binding and env:
+   - Python: bind 0.0.0.0 and set port WITH --reload flag (e.g., uvicorn --host 0.0.0.0 --port 8000 --reload).
+   - Node: ensure server binds 0.0.0.0; pass -p/--port if applicable (e.g., next/vite/dev servers). Dev modes typically have HMR enabled by default.
    - Sinatra: RACK_ENV=production bundle exec rackup -s webrick -o 0.0.0.0 -p <port>.
-   - Rails: Prefer bundler. If bin/rails is non-executable in a fresh checkout, use `bundle exec rails` instead of invoking the binstub directly. Start with: `ALLOWED_HOST=<sandbox-hostname> bundle exec rails server -b 0.0.0.0 -p 3000`.
+   - Rails: Prefer bundler. If bin/rails is non-executable in a fresh checkout, use `bundle exec rails` instead of invoking the binstub directly. Start with: `ALLOWED_HOST=<sandbox-hostname> bundle exec rails server -b 0.0.0.0 -p 3000`. Dev mode has auto-reloading by default.
    - Go: Prefer creating the sandbox with `runtime: go` so the Go toolchain is preinstalled. Use modules (`go mod init`, `go get`) and start with `go run .`. Ensure your Go server listens on 0.0.0.0. Default to port 3000 when unspecified.
-5) Wait: Stream logs until a ready pattern appears; compute preview URL from the port.
-6) Preview: Call sandbox_show_preview(url, port, label) which automatically performs a health check and returns the response. When previewing, make sure you preview a route that you know won't 404. For example, if you are previewing a backend with no 
+6) Wait: Stream logs until a ready pattern appears; compute preview URL from the port.
+7) Preview: Call sandbox_show_preview(url, port, label) which automatically performs a health check and returns the response. When previewing, make sure you preview a route that you know won't 404. For example, if you are previewing a backend with no 
 endpoint at the root but it has an endpoint at /api/hello, preview /api/hello instead of /
 For FastAPI previews, prefer previewing the /docs page over just the root.
-7) **If preview fails:** Debug the issue! Check logs, verify the server is actually running, ensure correct port binding, check for crashes. Do NOT ignore failures or claim success when things aren't working.
+8) **If preview fails:** Debug the issue! Check logs, verify the server is actually running, ensure correct port binding, check for crashes. Do NOT ignore failures or claim success when things aren't working.
 - Examples of when to wait for readiness (detached true + ready_patterns):
   - Python: uvicorn/fastapi/flask servers
   - Node: express/koa/nest/next dev/vite dev/node server.js
@@ -184,7 +189,7 @@ Available tools (high level):
 - sandbox_create(runtime, ports, timeout_ms, name?): create a sandbox. If name is provided, it becomes the active sandbox and is addressable by that name.
 - sandbox_run(command, cwd?, env?, detached?, ready_patterns?, port?, wait_timeout_ms?, stream_logs?, name?): run a command in the specified sandbox (by name). If multiple sandboxes are used (e.g., "frontend", "backend"), always pass name.
 -  Tips:
--    - Python/Uvicorn: the system auto-preps Python if needed and detects readiness (e.g., "Application startup complete"). Default port 8000 if unspecified.
+-    - Python/Uvicorn: the system auto-preps Python if needed and detects readiness (e.g., "Application startup complete"). Default port 8000 if unspecified. **ALWAYS use --reload flag for development servers** (e.g., `uvicorn app:app --reload`).
 -    - Ruby: you can request `runtime: ruby3.3`. Default ports: rackup 9292, Sinatra 4567. Readiness can be detected via common Rack/WEBrick/Sinatra log lines (e.g., "Listening on", "WEBrick::HTTPServer#start", "Sinatra has taken the stage"). You should use generally use `bundle exec __` commands. 
 -    - When running code, make sure to install required dependencies first (e.g. pip install -r requirements.txt, npm i, bundle install, etc.)
 - sandbox_set_env(env, name?): set default environment for subsequent runs for a specific sandbox (or active/default).
@@ -224,12 +229,14 @@ STEP 2 - Install dependencies in parallel WITH CORRECT CWD (single message, 2+ t
   ❌ WRONG: sandbox_run("npm install", name: "frontend") - fails if package.json is in frontend/
   ✅ RIGHT: sandbox_run("npm install", cwd: "frontend", name: "frontend")
 
-STEP 3 - Start backend (must complete before step 4):
-  sandbox_run("uvicorn app:app --host 0.0.0.0 --port 8000", cwd: "backend", detached: true, name: "backend")
+STEP 3 - Start backend WITH HOT RELOAD (must complete before step 4):
+  ✅ sandbox_run("uvicorn app:app --host 0.0.0.0 --port 8000 --reload", cwd: "backend", detached: true, name: "backend")
+  ⚠️ CRITICAL: Always include --reload flag for Python/uvicorn servers!
 
-STEP 4 - After backend URL available, configure and start frontend:
+STEP 4 - After backend URL available, configure and start frontend WITH HOT RELOAD:
   sandbox_set_env(["REACT_APP_API_URL=<backend_preview_url>"], name: "frontend")
-  sandbox_run("npm run dev -- --host --port 5173", cwd: "frontend", detached: true, port: 5173, name: "frontend")
+  ✅ sandbox_run("npm run dev -- --host --port 5173", cwd: "frontend", detached: true, port: 5173, name: "frontend")
+  Note: npm run dev typically has HMR enabled by default for Vite/Next.js
 ```
 
 ❌ WRONG approach (inefficient sequential execution):

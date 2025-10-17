@@ -1,5 +1,7 @@
 import React from 'react';
 import { loadPersistedState, savePersistedState, type PersistedState, type PersistedProjectState } from '../lib/persistence';
+import type { SandboxState, Snapshot } from '../types/sandbox';
+import { computeProjectHashes, type FileHashes } from '../lib/hash';
 import { getTemplateById, getStackById, TEMPLATES } from '../templates/index';
 
 export type ProjectTab = { id: string; name: string };
@@ -16,6 +18,7 @@ type ProjectState = {
   model: string;
   activeThreadId: string | null;
   templateId: string;
+  sandbox: SandboxState;
 };
 
 type ProjectsContextValue = {
@@ -36,6 +39,18 @@ type ProjectsContextValue = {
   expandedFolders: string[];
   setExpandedFolders: (paths: string[]) => void;
   templateId: string;
+
+  // sandbox derived status and actions
+  sandboxStatus: { editorAhead: number; sandboxAhead: number; diverged: number };
+  editorAheadPaths: string[];
+  sandboxAheadPaths: string[];
+  divergedPaths: string[];
+  hasSandboxBaseline: boolean;
+  setLastEditorSync: (snapshot: Snapshot) => void;
+  setLastSandboxSeen: (snapshot: Snapshot, lastData?: Record<string, string>) => void;
+  markSyncOnNextRun: () => void; // legacy alias, sets true
+  shouldSyncOnNextRun: boolean;
+  setSyncOnNextRun: (v: boolean) => void;
 
   // derived views
   isPathIgnored: (p: string) => boolean;
@@ -73,6 +88,9 @@ type ProjectsContextValue = {
   setModel: (v: string) => void;
   activeThreadId: string | null;
   setActiveThreadId: (v: string | null) => void;
+
+  // sandbox extras
+  sandboxLastData?: Record<string, string>;
 };
 
 const ProjectsContext = React.createContext<ProjectsContextValue | null>(null);
@@ -148,6 +166,11 @@ export const ProjectsProvider: React.FC<{ children: React.ReactNode }> = ({ chil
           model: s?.model || 'anthropic/claude-sonnet-4.5',
           activeThreadId: null,
           templateId: inferredTemplateId,
+          sandbox: {
+            sandboxId: s?.sandbox?.sandboxId,
+            lastEditorSync: s?.sandbox?.lastEditorSync,
+            lastSandboxSeen: s?.sandbox?.lastSandboxSeen,
+          },
         };
       }
       for (const p of (persisted?.projects || [])) {
@@ -164,12 +187,13 @@ export const ProjectsProvider: React.FC<{ children: React.ReactNode }> = ({ chil
             model: 'anthropic/claude-sonnet-4.5',
             activeThreadId: null,
             templateId: defaultTemplateId,
+            sandbox: {},
           };
         }
       }
       return out;
     }
-    return {
+    const initial: Record<string, ProjectState> = {
       [initialProjectId]: {
         files: defaultTemplate.files,
         proposals: {},
@@ -182,8 +206,10 @@ export const ProjectsProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         model: 'anthropic/claude-sonnet-4.5',
         activeThreadId: null,
         templateId: defaultTemplateId,
+        sandbox: {},
       },
     } as Record<string, ProjectState>;
+    return initial;
   });
 
   // persist essential fields
@@ -197,6 +223,11 @@ export const ProjectsProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         expandedFolders: st.expandedFolders,
         model: st.model,
         templateId: st.templateId,
+        sandbox: st.sandbox ? {
+          sandboxId: st.sandbox.sandboxId,
+          lastEditorSync: st.sandbox.lastEditorSync,
+          lastSandboxSeen: st.sandbox.lastSandboxSeen,
+        } : undefined,
       };
     }
     const activeIdSafe = projects.some(p => p.id === activeProjectId) ? activeProjectId : (projects[0]?.id || '');
@@ -212,22 +243,22 @@ export const ProjectsProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   const ensureProject = React.useCallback((id: string) => {
     setProjectStates(prev => {
       if (prev[id]) return prev;
-      return {
-        ...prev,
-        [id]: {
-          files: defaultTemplate.files,
-          proposals: {},
-          activeFile: defaultTemplate.defaultActiveFile,
-          folders: undefined,
-          expandedFolders: [],
-          input: '',
-          loading: false,
-          cancelling: false,
-          model: 'anthropic/claude-sonnet-4.5',
-          activeThreadId: null,
-          templateId: defaultTemplateId,
-        },
-      };
+      const next: Record<string, ProjectState> = { ...prev } as Record<string, ProjectState>;
+      next[id] = {
+        files: defaultTemplate.files,
+        proposals: {},
+        activeFile: defaultTemplate.defaultActiveFile,
+        folders: undefined,
+        expandedFolders: [],
+        input: '',
+        loading: false,
+        cancelling: false,
+        model: 'anthropic/claude-sonnet-4.5',
+        activeThreadId: null,
+        templateId: defaultTemplateId,
+        sandbox: {},
+      } as ProjectState;
+      return next;
     });
   }, [defaultTemplate.files, defaultTemplate.defaultActiveFile, defaultTemplateId]);
 
@@ -238,7 +269,7 @@ export const ProjectsProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 
   // Derived active state getters/setters
   const activeState = projectStates[activeProjectId] || ({
-    files: {}, proposals: {}, activeFile: '', folders: undefined, expandedFolders: [], input: '', loading: false, cancelling: false, model: 'anthropic/claude-sonnet-4.5', activeThreadId: null, templateId: defaultTemplateId,
+    files: {}, proposals: {}, activeFile: '', folders: undefined, expandedFolders: [], input: '', loading: false, cancelling: false, model: 'anthropic/claude-sonnet-4.5', activeThreadId: null, templateId: defaultTemplateId, sandbox: {},
   } as ProjectState);
 
   const setProject = React.useCallback((updater: (prev: Record<string, string>) => Record<string, string>) => {
@@ -382,6 +413,73 @@ export const ProjectsProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     }
     return out;
   }, [activeState.proposals, isPathIgnored]);
+
+  // Sandbox snapshots and derived diffs
+  const editorHashes: FileHashes = React.useMemo(() => computeProjectHashes(activeState.files, isPathIgnored), [activeState.files, isPathIgnored]);
+
+  const sandboxHashes: FileHashes = React.useMemo(() => {
+    return activeState.sandbox?.lastSandboxSeen?.fileHashes || {};
+  }, [activeState.sandbox?.lastSandboxSeen]);
+
+  const baseHashes: FileHashes = React.useMemo(() => {
+    return activeState.sandbox?.lastEditorSync?.fileHashes || {};
+  }, [activeState.sandbox?.lastEditorSync]);
+
+  const { editorAheadPaths, sandboxAheadPaths, divergedPaths } = React.useMemo(() => {
+    const hasBaseline = Boolean(activeState.sandbox?.lastEditorSync || activeState.sandbox?.lastSandboxSeen);
+    if (!hasBaseline) {
+      return { editorAheadPaths: [], sandboxAheadPaths: [], divergedPaths: [] };
+    }
+    const allPaths = new Set<string>([...Object.keys(editorHashes), ...Object.keys(sandboxHashes), ...Object.keys(baseHashes)]);
+    const editorAhead: string[] = [];
+    const sandboxAhead: string[] = [];
+    const diverged: string[] = [];
+    for (const p of allPaths) {
+      const e = editorHashes[p];
+      const s = sandboxHashes[p];
+      const b = baseHashes[p];
+      const eNeqB = e !== b;
+      const sNeqB = s !== b;
+      if (eNeqB && !sNeqB) editorAhead.push(p);
+      else if (!eNeqB && sNeqB) sandboxAhead.push(p);
+      else if (eNeqB && sNeqB && e !== s) diverged.push(p);
+    }
+    return { editorAheadPaths: editorAhead.sort(), sandboxAheadPaths: sandboxAhead.sort(), divergedPaths: diverged.sort() };
+  }, [editorHashes, sandboxHashes, baseHashes]);
+
+  const sandboxStatus = React.useMemo(() => ({ editorAhead: editorAheadPaths.length, sandboxAhead: sandboxAheadPaths.length, diverged: divergedPaths.length }), [editorAheadPaths.length, sandboxAheadPaths.length, divergedPaths.length]);
+  const hasSandboxBaseline = React.useMemo(
+    () => Boolean(activeState.sandbox?.lastEditorSync || activeState.sandbox?.lastSandboxSeen),
+    [activeState.sandbox?.lastEditorSync, activeState.sandbox?.lastSandboxSeen]
+  );
+
+  const setLastEditorSync = React.useCallback((snapshot: Snapshot) => {
+    setProjectStates(prev => ({
+      ...prev,
+      [activeProjectId]: { ...prev[activeProjectId], sandbox: { ...prev[activeProjectId].sandbox, lastEditorSync: snapshot } },
+    }));
+  }, [activeProjectId]);
+
+  const setLastSandboxSeen = React.useCallback((snapshot: Snapshot, lastData?: Record<string, string>) => {
+    setProjectStates(prev => ({
+      ...prev,
+      [activeProjectId]: { ...prev[activeProjectId], sandbox: { ...prev[activeProjectId].sandbox, lastSandboxSeen: snapshot, ...(lastData ? { lastData } : {}) } },
+    }));
+  }, [activeProjectId]);
+
+  const markSyncOnNextRun = React.useCallback(() => {
+    setProjectStates(prev => ({
+      ...prev,
+      [activeProjectId]: { ...prev[activeProjectId], sandbox: { ...prev[activeProjectId].sandbox, shouldSyncOnNextRun: true } },
+    }));
+  }, [activeProjectId]);
+
+  const setSyncOnNextRun = React.useCallback((v: boolean) => {
+    setProjectStates(prev => ({
+      ...prev,
+      [activeProjectId]: { ...prev[activeProjectId], sandbox: { ...prev[activeProjectId].sandbox, shouldSyncOnNextRun: v } },
+    }));
+  }, [activeProjectId]);
 
   // File operations with active-file and proposals consistency
   const createFile = React.useCallback((name: string) => {
@@ -597,6 +695,7 @@ export const ProjectsProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         model: 'anthropic/claude-sonnet-4.5',
         activeThreadId: null,
         templateId,
+        sandbox: {},
       },
     }));
     setActiveProjectId(id);
@@ -635,6 +734,7 @@ export const ProjectsProvider: React.FC<{ children: React.ReactNode }> = ({ chil
           model: srcState.model,
           activeThreadId: null,
           templateId: srcState.templateId,
+          sandbox: {},
         },
       }));
     }
@@ -682,6 +782,16 @@ export const ProjectsProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     expandedFolders: activeState.expandedFolders,
     setExpandedFolders,
     templateId: activeState.templateId,
+    sandboxStatus,
+    editorAheadPaths,
+    sandboxAheadPaths,
+    divergedPaths,
+    setLastEditorSync,
+    setLastSandboxSeen,
+    markSyncOnNextRun,
+    shouldSyncOnNextRun: Boolean(activeState.sandbox?.shouldSyncOnNextRun),
+    setSyncOnNextRun,
+    hasSandboxBaseline,
     isPathIgnored,
     projectForTree,
     proposalsForTree,
@@ -711,6 +821,7 @@ export const ProjectsProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     setModel,
     activeThreadId: activeState.activeThreadId,
     setActiveThreadId,
+    sandboxLastData: activeState.sandbox?.lastData,
   };
 
   return (

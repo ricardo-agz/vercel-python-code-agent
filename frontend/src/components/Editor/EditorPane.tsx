@@ -2,6 +2,11 @@ import React from 'react';
 import Editor, { DiffEditor, useMonaco } from '@monaco-editor/react';
 import { ChevronLeft, ChevronRight } from 'lucide-react';
 import type * as monaco from 'monaco-editor';
+import { useProjects } from '../../context/ProjectsContext';
+import { API_BASE } from '../../constants';
+import { useAuth } from '../../context/AuthContext';
+import { computeProjectHashes } from '../../lib/hash';
+import { getUserId } from '../../lib/user';
 
 type DiffEditorRef = monaco.editor.IStandaloneDiffEditor | null;
 
@@ -36,6 +41,43 @@ export const EditorPane: React.FC<EditorPaneProps> = ({
   const diffEditorRef = React.useRef<DiffEditorRef>(null);
   const editorRef = React.useRef<monaco.editor.IStandaloneCodeEditor | null>(null);
   const monacoInstance = useMonaco();
+  const { sandboxStatus, project, proposals, activeProjectId, setLastEditorSync, setLastSandboxSeen } = useProjects();
+  const { isAuthenticated, openModal } = useAuth();
+  const isOutOfSync = (sandboxStatus.editorAhead + sandboxStatus.sandboxAhead + sandboxStatus.diverged) > 0;
+
+  const [syncing, setSyncing] = React.useState<boolean>(false);
+
+  const handleImmediateSync = React.useCallback(async () => {
+    if (!isAuthenticated) { openModal(); return; }
+    if (syncing) return;
+    setSyncing(true);
+    try {
+      // Push merged editor + proposals (same as run payload) to live sandbox
+      const merged: Record<string, string> = { ...project };
+      for (const [p, c] of Object.entries(proposals || {})) merged[p] = c as string;
+      const userId: string = getUserId();
+      const resp = await fetch(`${API_BASE}/play/sync`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ user_id: userId, project: merged, project_id: activeProjectId }),
+      });
+      const data = await resp.json().catch(() => ({ ok: false }));
+      if (resp.ok && data && data.ok) {
+        // Mark sandbox as in-sync only on success
+        const hashes = computeProjectHashes(merged);
+        const now = new Date().toISOString();
+        setLastEditorSync({ at: now, fileHashes: hashes });
+        setLastSandboxSeen({ at: now, fileHashes: hashes });
+      } else {
+        // Optionally surface an error in console; UI remains unchanged
+        console.warn('Sandbox sync failed:', data?.error || resp.statusText);
+      }
+    } catch {
+      // noop
+    } finally {
+      setSyncing(false);
+    }
+  }, [isAuthenticated, openModal, project, proposals, activeProjectId, setLastEditorSync, setLastSandboxSeen, syncing]);
 
   // Create a Monaco theme that follows our CSS variables (Vercel dark)
   React.useEffect(() => {
@@ -257,6 +299,17 @@ export const EditorPane: React.FC<EditorPaneProps> = ({
     <div className="flex-1 flex flex-col" style={{ width: '100%' }}>
       <div className="px-3 flex items-center justify-between" style={{ backgroundColor: 'var(--vscode-panel)', borderBottom: '1px solid var(--vscode-panel-border)', height: 'var(--header-height)' }}>
         <div className="text-sm font-medium m-0" style={{ color: 'var(--vscode-text)' }}>{fileName}</div>
+        {isOutOfSync && (
+          <button
+            onClick={handleImmediateSync}
+            className="px-2 py-1 rounded-sm text-xs cursor-pointer"
+            style={{ background: syncing ? 'var(--vscode-surface)' : 'var(--vscode-accent)', color: syncing ? 'var(--vscode-text)' : '#ffffff', border: '1px solid var(--vscode-panel-border)' }}
+            disabled={syncing}
+            title={'Push editor changes to the running sandbox now'}
+          >
+            {syncing ? 'Syncing…' : 'Sync sandbox'}
+          </button>
+        )}
       </div>
       <div className="flex-1 min-h-0 overflow-hidden relative">
         {isImage ? (

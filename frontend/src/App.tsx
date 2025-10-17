@@ -30,9 +30,12 @@ import {
 } from './lib/persistence.ts';
 import { History as HistoryIcon, Plus, X } from 'lucide-react';
 import { useProjects } from './context/ProjectsContext';
+import { ensureGlobalUserId } from './lib/user';
 
 
-const USER_ID = `user_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+// Ensure a stable user id available globally and persisted
+ensureGlobalUserId();
+const USER_ID = ensureGlobalUserId();
 
 
 function App() {
