@@ -3,6 +3,8 @@ import { loadPersistedState, savePersistedState, type PersistedState, type Persi
 import type { SandboxState, Snapshot } from '../types/sandbox';
 import { computeProjectHashes, type FileHashes } from '../lib/hash';
 import { getTemplateById, getStackById, TEMPLATES } from '../templates/index';
+import { API_BASE } from '../constants';
+import { getUserId } from '../lib/user';
 
 export type ProjectTab = { id: string; name: string };
 
@@ -95,6 +97,8 @@ type ProjectsContextValue = {
   // auto sync state
   autoSyncing: boolean;
   setAutoSyncing: (v: boolean) => void;
+  // manual immediate sync
+  syncSandboxNow: () => Promise<boolean>;
 };
 
 const ProjectsContext = React.createContext<ProjectsContextValue | null>(null);
@@ -328,6 +332,49 @@ export const ProjectsProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     setProjectStates(prev => ({ ...prev, [activeProjectId]: { ...prev[activeProjectId], autoSyncing: v } }));
   }, [activeProjectId]);
 
+  // Expose helpers to update sandbox snapshots; these must be defined before any
+  // callbacks that reference them (e.g., syncSandboxNow) to avoid TDZ issues.
+  const setLastEditorSync = React.useCallback((snapshot: Snapshot) => {
+    setProjectStates(prev => ({
+      ...prev,
+      [activeProjectId]: { ...prev[activeProjectId], sandbox: { ...prev[activeProjectId].sandbox, lastEditorSync: snapshot } },
+    }));
+  }, [activeProjectId]);
+
+  const setLastSandboxSeen = React.useCallback((snapshot: Snapshot, lastData?: Record<string, string>) => {
+    setProjectStates(prev => ({
+      ...prev,
+      [activeProjectId]: { ...prev[activeProjectId], sandbox: { ...prev[activeProjectId].sandbox, lastSandboxSeen: snapshot, ...(lastData ? { lastData } : {}) } },
+    }));
+  }, [activeProjectId]);
+
+  const syncSandboxNow = React.useCallback(async (): Promise<boolean> => {
+    try {
+      setAutoSyncing(true);
+      const merged: Record<string, string> = { ...activeState.files };
+      for (const [p, c] of Object.entries(activeState.proposals || {})) merged[p] = c as string;
+      const userId = getUserId();
+      const resp = await fetch(`${API_BASE}/play/sync`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ user_id: userId, project_id: activeProjectId, project: merged }),
+      });
+      const data = await resp.json().catch(() => ({ ok: false }));
+      if (resp.ok && data && data.ok) {
+        const hashes = computeProjectHashes(merged);
+        const nowISO = new Date().toISOString();
+        setLastEditorSync({ at: nowISO, fileHashes: hashes });
+        setLastSandboxSeen({ at: nowISO, fileHashes: hashes });
+        return true;
+      }
+      return false;
+    } catch {
+      return false;
+    } finally {
+      setAutoSyncing(false);
+    }
+  }, [activeProjectId, activeState.files, activeState.proposals, setLastEditorSync, setLastSandboxSeen, setAutoSyncing]);
+
   const setCode = React.useCallback((next: string) => {
     setProject(prev => ({ ...prev, [activeState.activeFile]: next }));
   }, [activeState.activeFile, setProject]);
@@ -463,19 +510,7 @@ export const ProjectsProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     [activeState.sandbox?.lastEditorSync, activeState.sandbox?.lastSandboxSeen]
   );
 
-  const setLastEditorSync = React.useCallback((snapshot: Snapshot) => {
-    setProjectStates(prev => ({
-      ...prev,
-      [activeProjectId]: { ...prev[activeProjectId], sandbox: { ...prev[activeProjectId].sandbox, lastEditorSync: snapshot } },
-    }));
-  }, [activeProjectId]);
-
-  const setLastSandboxSeen = React.useCallback((snapshot: Snapshot, lastData?: Record<string, string>) => {
-    setProjectStates(prev => ({
-      ...prev,
-      [activeProjectId]: { ...prev[activeProjectId], sandbox: { ...prev[activeProjectId].sandbox, lastSandboxSeen: snapshot, ...(lastData ? { lastData } : {}) } },
-    }));
-  }, [activeProjectId]);
+  // (setLastEditorSync/setLastSandboxSeen moved above to avoid TDZ when used in syncSandboxNow)
 
   const markSyncOnNextRun = React.useCallback(() => {
     setProjectStates(prev => ({
@@ -834,6 +869,7 @@ export const ProjectsProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     sandboxLastData: activeState.sandbox?.lastData,
     autoSyncing: Boolean(activeState.autoSyncing),
     setAutoSyncing,
+    syncSandboxNow,
   };
 
   return (
