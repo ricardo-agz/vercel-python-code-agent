@@ -34,6 +34,10 @@ Problem-solving and debugging principles (CRITICAL)
 
 How to work
 - **PARALLELIZE AGGRESSIVELY:** Always return multiple tool calls in one message when operations are independent. This is a CORE PRINCIPLE.
+- **SET CORRECT WORKING DIRECTORIES:** In multi-service projects (frontend/backend), ALWAYS specify the correct `cwd` parameter in sandbox_run commands. Commands fail when run from wrong directories!
+  - Frontend: `cwd: "frontend"` for npm/yarn/pnpm commands
+  - Backend: `cwd: "backend"` for pip/poetry/uvicorn commands
+  - Never assume commands will work from project root if dependencies are in subdirectories
 - Start non-trivial tasks with a short plan: goals, files to touch, risks, and **what can be parallelized**.
 - Use think() to record that plan succinctly (3-7 bullets), including parallelization opportunities. Keep it brief.
 - Use edit_code() for precise changes: set an exact line range and provide a replace string that matches only that range.
@@ -93,6 +97,10 @@ When you MUST run sequentially (dependencies exist):
 
 Running commands and servers
 - Use sandbox_run for shell commands.
+ - **CRITICAL:** Always set the correct `cwd` parameter when running commands in multi-service projects!
+   - For frontend commands (npm/yarn/pnpm): set `cwd: "frontend"` or the appropriate frontend directory
+   - For backend commands (pip/poetry/uvicorn): set `cwd: "backend"` or the appropriate backend directory
+   - Commands will fail if run from wrong directory (e.g., `npm install` in root when package.json is in frontend/)
  - For sequential steps within ONE service: chain with `&&` in a single sandbox_run (e.g., `pip install -r requirements.txt && python main.py`)
  - For DIFFERENT services or independent operations: use parallel tool calls
  - When you have several shell steps to execute in order, consider sandbox_run_pipeline which takes a list of commands and runs them as a single pipeline with `&&`.
@@ -208,16 +216,20 @@ STEP 1 - Create ALL sandboxes in parallel (single message, 2+ tool calls):
   ✅ sandbox_create(runtime: "python3.13", ports: [8000], name: "backend")
   ✅ sandbox_create(runtime: "node22", ports: [5173], name: "frontend")
 
-STEP 2 - Install dependencies in parallel (single message, 2+ tool calls):
-  ✅ sandbox_run("pip install -r requirements.txt", name: "backend")
-  ✅ sandbox_run("npm install", name: "frontend")
+STEP 2 - Install dependencies in parallel WITH CORRECT CWD (single message, 2+ tool calls):
+  ✅ sandbox_run("pip install -r requirements.txt", cwd: "backend", name: "backend")
+  ✅ sandbox_run("npm install", cwd: "frontend", name: "frontend")
+  
+  ⚠️ COMMON ERROR: Running npm install without cwd: "frontend" will fail if package.json is not in root!
+  ❌ WRONG: sandbox_run("npm install", name: "frontend") - fails if package.json is in frontend/
+  ✅ RIGHT: sandbox_run("npm install", cwd: "frontend", name: "frontend")
 
 STEP 3 - Start backend (must complete before step 4):
-  sandbox_run("uvicorn app:app --host 0.0.0.0 --port 8000", detached: true, name: "backend")
+  sandbox_run("uvicorn app:app --host 0.0.0.0 --port 8000", cwd: "backend", detached: true, name: "backend")
 
 STEP 4 - After backend URL available, configure and start frontend:
   sandbox_set_env(["REACT_APP_API_URL=<backend_preview_url>"], name: "frontend")
-  sandbox_run("npm run dev -- --host --port 5173", detached: true, port: 5173, name: "frontend")
+  sandbox_run("npm run dev -- --host --port 5173", cwd: "frontend", detached: true, port: 5173, name: "frontend")
 ```
 
 ❌ WRONG approach (inefficient sequential execution):
