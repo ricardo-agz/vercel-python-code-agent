@@ -3,6 +3,8 @@ import { useAuth } from '../context/AuthContext';
 import type { Action } from '../types/run';
 import { useRuns } from '../context/RunContext';
 import { API_BASE } from '../constants';
+import { useProjects } from '../context/ProjectsContext';
+import { computeProjectHashes } from '../lib/hash';
 
 interface UseChatProps {
   userId: string;
@@ -35,6 +37,7 @@ export const useChat = ({
 }: UseChatProps) => {
   const { isAuthenticated, openModal } = useAuth();
   const { runs, runOrder, createRun, addAction, updateAction, setRunStatus } = useRuns();
+  const { setLastEditorSync, shouldSyncOnNextRun, setSyncOnNextRun } = useProjects();
   const sendPrompt = useCallback(async () => {
     if (!input.trim()) return;
     if (!isAuthenticated) {
@@ -58,6 +61,16 @@ export const useChat = ({
       return messages;
     });
 
+    // If a sync was requested for next run, record an editor snapshot now (hashes of current editor files)
+    if (shouldSyncOnNextRun) {
+      try {
+        const hashes = computeProjectHashes(project);
+        setLastEditorSync({ at: new Date().toISOString(), fileHashes: hashes });
+      } catch {
+        // noop
+      }
+    }
+
     const res = await fetch(`${API_BASE}/runs`, {
       method : 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -73,6 +86,7 @@ export const useChat = ({
         })(),
         message_history,
         model,
+        project_id: projectId,
       }),
     });
 
@@ -94,11 +108,13 @@ export const useChat = ({
       stream.connect(task_id, stream_token);
       // Mark run as actively streaming (latest run will be treated as active in UI)
       setRunStatus(task_id, 'streaming');
+      // Clear the one-shot sync flag after dispatching the run
+      if (shouldSyncOnNextRun) setSyncOnNextRun(false);
     } else {
       console.error('enqueue failed');
       setLoading(false);
     }
-  }, [input, isAuthenticated, openModal, userId, project, proposals, projectId, threadId, setInput, setLoading, createRun, addAction, runs, runOrder, stream, model, setRunStatus]);
+  }, [input, isAuthenticated, openModal, userId, project, proposals, projectId, threadId, setInput, setLoading, createRun, addAction, runs, runOrder, stream, model, setRunStatus, setLastEditorSync, shouldSyncOnNextRun, setSyncOnNextRun]);
 
   const cancelCurrentTask = useCallback((taskId?: string) => {
     const targetId = taskId;

@@ -1,3 +1,5 @@
+import type { SandboxState } from '../types/sandbox';
+
 export type PersistedProjectState = {
   files: Record<string, string>;
   activeFile: string;
@@ -5,6 +7,8 @@ export type PersistedProjectState = {
   expandedFolders?: string[];
   model?: string;
   templateId?: string;
+  // Persist sandbox snapshot metadata only (omit large caches like lastData)
+  sandbox?: Omit<SandboxState, 'lastData' | 'shouldSyncOnNextRun'>;
 };
 
 export type PersistedState = {

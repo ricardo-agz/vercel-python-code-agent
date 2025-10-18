@@ -68,3 +68,27 @@ async def remove_user_sandbox(user_id: str, name: str) -> None:
     if name in cur:
         cur.pop(name, None)
         await cache.set(_user_sbx_key(user_id), cur, {"ttl": _TTL_SECONDS})
+
+
+# Per-user-per-project sandbox mappings (name -> sandbox_id)
+
+def _user_project_sbx_key(user_id: str, project_id: str) -> str:
+    return f"user:{user_id}:project:{project_id}:sandboxes"
+
+
+async def get_user_project_sandboxes(user_id: str, project_id: str) -> dict[str, str]:
+    val = await cache.get(_user_project_sbx_key(user_id, project_id))
+    return dict(val) if isinstance(val, dict) else {}
+
+
+async def upsert_user_project_sandbox(user_id: str, project_id: str, name: str, sandbox_id: str) -> None:
+    cur = await get_user_project_sandboxes(user_id, project_id)
+    cur[name] = sandbox_id
+    await cache.set(_user_project_sbx_key(user_id, project_id), cur, {"ttl": _TTL_SECONDS})
+
+
+async def remove_user_project_sandbox(user_id: str, project_id: str, name: str) -> None:
+    cur = await get_user_project_sandboxes(user_id, project_id)
+    if name in cur:
+        cur.pop(name, None)
+        await cache.set(_user_project_sbx_key(user_id, project_id), cur, {"ttl": _TTL_SECONDS})

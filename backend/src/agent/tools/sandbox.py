@@ -2,6 +2,7 @@ import json
 import asyncio
 import time
 
+import httpx
 from vercel.sandbox import AsyncSandbox as Sandbox
 from agents import function_tool, RunContextWrapper
 
@@ -19,7 +20,12 @@ from src.sandbox.utils import (
     snapshot_file_changes,
 )
 from src.sandbox.cache import SANDBOX_CACHE
-from src.run_store import upsert_user_sandbox, remove_user_sandbox
+from src.run_store import (
+    upsert_user_sandbox,
+    remove_user_sandbox,
+    upsert_user_project_sandbox,
+    remove_user_project_sandbox,
+)
 from src.sandbox.command import (
     select_safe_cwd,
     detect_language_usage,
@@ -168,19 +174,27 @@ async def sandbox_create(
     # Persist mapping per-user for cross-run autosync
     try:
         user_id = (ctx.context.base_payload or {}).get("user_id") or ""
+        project_id = (ctx.context.base_payload or {}).get("project_id") or ""
         if user_id:
             import asyncio as _asyncio
 
-            coro = upsert_user_sandbox(user_id, sb_name, sandbox.sandbox_id)
+            tasks = [upsert_user_sandbox(user_id, sb_name, sandbox.sandbox_id)]
+            if project_id:
+                tasks.append(upsert_user_project_sandbox(user_id, project_id, sb_name, sandbox.sandbox_id))
+            async def _run_all():
+                for c in tasks:
+                    try:
+                        await c
+                    except Exception:
+                        pass
             try:
                 loop = _asyncio.get_event_loop()
                 if loop.is_running():
-                    loop.create_task(coro)
+                    loop.create_task(_run_all())
                 else:
-                    loop.run_until_complete(coro)  # unlikely path
+                    loop.run_until_complete(_run_all())  # unlikely path
             except RuntimeError:
-                # When no loop, best-effort run
-                _asyncio.run(coro)
+                _asyncio.run(_run_all())
     except Exception:
         pass
     return json.dumps(output)
@@ -238,18 +252,27 @@ async def sandbox_stop(
     # Remove mapping from per-user store
     try:
         user_id = (ctx.context.base_payload or {}).get("user_id") or ""
+        project_id = (ctx.context.base_payload or {}).get("project_id") or ""
         if user_id and sb_name:
             import asyncio as _asyncio
 
-            coro = remove_user_sandbox(user_id, sb_name)
+            tasks = [remove_user_sandbox(user_id, sb_name)]
+            if project_id:
+                tasks.append(remove_user_project_sandbox(user_id, project_id, sb_name))
+            async def _run_all():
+                for c in tasks:
+                    try:
+                        await c
+                    except Exception:
+                        pass
             try:
                 loop = _asyncio.get_event_loop()
                 if loop.is_running():
-                    loop.create_task(coro)
+                    loop.create_task(_run_all())
                 else:
-                    loop.run_until_complete(coro)
+                    loop.run_until_complete(_run_all())
             except RuntimeError:
-                _asyncio.run(coro)
+                _asyncio.run(_run_all())
     except Exception:
         pass
     return json.dumps(output)
@@ -620,13 +643,17 @@ async def sandbox_show_preview(
     name: str | None = None,
 ) -> str:
     """Emit a preview URL for the active sandbox so the UI can render it.
+    Automatically makes a curl request to verify the URL is accessible.
+    Make sure to preview a route that contains a real endpoint. For example, 
+    if you are previewing a backend that doesn not have anything at the root but
+    it has an endpoint at /api/hello, you should preview /api/hello.
 
     Args:
         url: The full preview URL.
         port: Optional port used by the service.
         label: Optional descriptive label (e.g., 'frontend', 'backend').
     Returns:
-        JSON with preview info.
+        JSON with preview info and curl response details.
     """
     tool_id = f"tc_{len(ctx.context.events) + 1}"
     sb_name = normalize_sandbox_name(ctx, name)
@@ -639,11 +666,75 @@ async def sandbox_show_preview(
             "arguments": args,
         }
     )
+    
+    # Make HTTP request to verify the preview URL
+    curl_result = {}
+    try:
+        async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as client:
+            response = await client.get(url)
+            curl_result = {
+                "status_code": response.status_code,
+                "status": "success" if 200 <= response.status_code < 300 else "error",
+                "headers": dict(response.headers),
+                "content": response.text[:5000] if response.text else None,  # Limit content to 5000 chars
+                "content_type": response.headers.get("content-type", ""),
+            }
+            
+            # Log the curl result to the events
+            ctx.context.events.append(
+                {
+                    "phase": "log",
+                    "tool_id": tool_id,
+                    "name": "sandbox_show_preview",
+                    "data": f"[{sb_name}] Preview health check: HTTP {response.status_code} for {url}\n",
+                }
+            )
+    except httpx.TimeoutException:
+        curl_result = {
+            "status": "timeout",
+            "error": "Request timed out after 10 seconds"
+        }
+        ctx.context.events.append(
+            {
+                "phase": "log",
+                "tool_id": tool_id,
+                "name": "sandbox_show_preview",
+                "data": f"[{sb_name}] Preview health check: TIMEOUT for {url}\n",
+            }
+        )
+    except httpx.ConnectError as e:
+        curl_result = {
+            "status": "connection_error",
+            "error": f"Connection failed: {str(e)}"
+        }
+        ctx.context.events.append(
+            {
+                "phase": "log",
+                "tool_id": tool_id,
+                "name": "sandbox_show_preview",
+                "data": f"[{sb_name}] Preview health check: CONNECTION ERROR for {url}\n",
+            }
+        )
+    except Exception as e:
+        curl_result = {
+            "status": "error",
+            "error": f"Unexpected error: {str(e)}"
+        }
+        ctx.context.events.append(
+            {
+                "phase": "log",
+                "tool_id": tool_id,
+                "name": "sandbox_show_preview",
+                "data": f"[{sb_name}] Preview health check: ERROR - {str(e)}\n",
+            }
+        )
+    
     output = {
         "url": url,
         **({"port": port} if port else {}),
         **({"label": label} if label else {}),
         "name": sb_name,
+        "curl_result": curl_result,
     }
     ctx.context.events.append(
         {

@@ -1,5 +1,115 @@
 import React from 'react';
-import { TEMPLATES, FRONTEND_TEMPLATE_IDS, BACKEND_TEMPLATE_IDS } from '../templates/index';
+import { TEMPLATES, FRONTEND_TEMPLATE_IDS, BACKEND_TEMPLATE_IDS } from '../templates';
+
+// Template icon configuration - can be a single icon or array for stacked icons
+// Each icon can be either a domain for favicon or 'icon:' prefix for regular icons
+const TEMPLATE_ICONS: Record<string, string | string[]> = {
+  blank: 'icon:📄', // Regular document icon
+  fastapi: 'fastapi.tiangolo.com',
+  express: 'expressjs.com',
+  flask: 'flask.palletsprojects.com',
+  hono: 'hono.dev',
+  next: 'nextjs.org',
+  next_stack: 'nextjs.org',
+  react: 'react.dev',
+  react_stack: 'react.dev',
+  go: 'go.dev',
+  rails: 'rubyonrails.org',
+  react_fastapi: ['nextjs.org', 'fastapi.tiangolo.com'], // Stack both icons
+};
+
+const TemplateIcon: React.FC<{ templateId: string; size?: number }> = ({ templateId, size = 16 }) => {
+  const iconConfig = TEMPLATE_ICONS[templateId];
+  
+  if (!iconConfig) {
+    // Fallback to a generic code icon
+    return <span style={{ fontSize: size, width: size, height: size, display: 'inline-block' }}>💻</span>;
+  }
+  
+  // Helper to render a single icon
+  const renderIcon = (icon: string) => {
+    if (icon.startsWith('icon:')) {
+      // Regular icon (emoji or unicode)
+      const emoji = icon.substring(5);
+      return <span style={{ fontSize: size, width: size, height: size, display: 'inline-block' }}>{emoji}</span>;
+    }
+    
+    // Favicon from domain
+    const faviconUrl = `https://www.google.com/s2/favicons?domain=${icon}&sz=128`;
+    return (
+      <img 
+        src={faviconUrl} 
+        alt=""
+        style={{ width: size, height: size }}
+        onError={(e) => {
+          // If favicon fails to load, replace with a generic icon
+          const target = e.target as HTMLImageElement;
+          target.style.display = 'none';
+          const span = document.createElement('span');
+          span.textContent = '📦';
+          span.style.fontSize = `${size}px`;
+          span.style.width = `${size}px`;
+          span.style.height = `${size}px`;
+          span.style.display = 'inline-block';
+          target.parentNode?.replaceChild(span, target);
+        }}
+      />
+    );
+  };
+  
+  // Handle array of icons (side by side)
+  if (Array.isArray(iconConfig)) {
+    const iconSize = size * 0.75; // Make icons slightly smaller to fit together
+    const gap = 2; // Small gap between icons
+    
+    return (
+      <div style={{ 
+        display: 'flex', 
+        alignItems: 'center',
+        gap: gap,
+        width: 'fit-content',
+        height: size 
+      }}>
+        {iconConfig.map((icon, index) => {
+          if (icon.startsWith('icon:')) {
+            const emoji = icon.substring(5);
+            return (
+              <span 
+                key={index}
+                style={{ 
+                  fontSize: iconSize, 
+                  width: iconSize, 
+                  height: iconSize, 
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  justifyContent: 'center'
+                }}
+              >
+                {emoji}
+              </span>
+            );
+          }
+          
+          return (
+            <img 
+              key={index}
+              src={`https://www.google.com/s2/favicons?domain=${icon}&sz=128`}
+              alt=""
+              style={{ 
+                width: iconSize, 
+                height: iconSize,
+                flexShrink: 0
+              }}
+            />
+          );
+        })}
+      </div>
+    );
+  }
+  
+  // Single icon
+  return renderIcon(iconConfig);
+};
 
 type NewProjectModalProps = {
   visible: boolean;
@@ -13,7 +123,7 @@ export const NewProjectModal: React.FC<NewProjectModalProps> = ({ visible, defau
   const [name, setName] = React.useState<string>('');
   const [mode, setMode] = React.useState<'template' | 'stack'>('template');
   const [templateId, setTemplateId] = React.useState<string>('fastapi');
-  const [frontendId, setFrontendId] = React.useState<string>('next');
+  const [frontendId, setFrontendId] = React.useState<string>('next_stack');
   const [backendId, setBackendId] = React.useState<string>('fastapi');
   const inputRef = React.useRef<HTMLInputElement>(null);
 
@@ -23,7 +133,7 @@ export const NewProjectModal: React.FC<NewProjectModalProps> = ({ visible, defau
       setName('');
       setMode('template');
       setTemplateId('fastapi');
-      setFrontendId('next');
+      setFrontendId('next_stack');
       setBackendId('fastapi');
       requestAnimationFrame(() => inputRef.current?.focus());
     }
@@ -107,7 +217,7 @@ export const NewProjectModal: React.FC<NewProjectModalProps> = ({ visible, defau
               <>
                 <label className="text-xs" htmlFor="new-project-template" style={{ color: 'var(--vscode-muted)' }}>Choose a template</label>
                 <div className="mt-1 grid grid-cols-2 gap-2">
-                  {TEMPLATES.map(t => (
+                  {TEMPLATES.filter(t => !(FRONTEND_TEMPLATE_IDS as readonly string[]).includes(t.id)).map(t => (
                     <button
                       key={t.id}
                       onClick={() => setTemplateId(t.id)}
@@ -118,10 +228,17 @@ export const NewProjectModal: React.FC<NewProjectModalProps> = ({ visible, defau
                         color: 'var(--vscode-text)'
                       }}
                     >
-                      <div className="text-sm font-medium">{t.label}</div>
-                      {t.description ? (
-                        <div className="text-xs" style={{ color: 'var(--vscode-muted)' }}>{t.description}</div>
-                      ) : null}
+                      <div className="flex items-start gap-2">
+                        <div className="mt-0.5">
+                          <TemplateIcon templateId={t.id} size={16} />
+                        </div>
+                        <div className="flex-1">
+                          <div className="text-sm font-medium">{t.label}</div>
+                          {t.description ? (
+                            <div className="text-xs" style={{ color: 'var(--vscode-muted)' }}>{t.description}</div>
+                          ) : null}
+                        </div>
+                      </div>
                     </button>
                   ))}
                 </div>
@@ -141,10 +258,17 @@ export const NewProjectModal: React.FC<NewProjectModalProps> = ({ visible, defau
                         color: 'var(--vscode-text)'
                       }}
                     >
-                      <div className="text-sm font-medium">{t.label}</div>
-                      {t.description ? (
-                        <div className="text-xs" style={{ color: 'var(--vscode-muted)' }}>{t.description}</div>
-                      ) : null}
+                      <div className="flex items-start gap-2">
+                        <div className="mt-0.5">
+                          <TemplateIcon templateId={t.id} size={16} />
+                        </div>
+                        <div className="flex-1">
+                          <div className="text-sm font-medium">{t.label}</div>
+                          {t.description ? (
+                            <div className="text-xs" style={{ color: 'var(--vscode-muted)' }}>{t.description}</div>
+                          ) : null}
+                        </div>
+                      </div>
                     </button>
                   ))}
                 </div>
@@ -162,10 +286,17 @@ export const NewProjectModal: React.FC<NewProjectModalProps> = ({ visible, defau
                           color: 'var(--vscode-text)'
                         }}
                       >
-                        <div className="text-sm font-medium">{t.label}</div>
-                        {t.description ? (
-                          <div className="text-xs" style={{ color: 'var(--vscode-muted)' }}>{t.description}</div>
-                        ) : null}
+                        <div className="flex items-start gap-2">
+                          <div className="mt-0.5">
+                            <TemplateIcon templateId={t.id} size={16} />
+                          </div>
+                          <div className="flex-1">
+                            <div className="text-sm font-medium">{t.label}</div>
+                            {t.description ? (
+                              <div className="text-xs" style={{ color: 'var(--vscode-muted)' }}>{t.description}</div>
+                            ) : null}
+                          </div>
+                        </div>
                       </button>
                     ))}
                   </div>

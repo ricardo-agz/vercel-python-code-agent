@@ -2,19 +2,11 @@ import { useCallback, useRef, useEffect } from 'react';
 import type { AgentEvent } from '../types';
 import { useRuns } from '../context/RunContext';
 import type { Action } from '../types/run';
+import { useProjects } from '../context/ProjectsContext';
+import { buildSandboxSnapshot } from '../lib/sandbox';
+import { computeProjectHashes } from '../lib/hash';
 
 interface UseAgentEventsProps {
-  setLoading: (loading: boolean) => void;
-  setCancelling: (cancelling: boolean) => void;
-  // Allow updating UI state for background runs by project id
-  setLoadingForProject?: (projectId: string, loading: boolean) => void;
-  upsertProposal: (filePath: string, newContent: string) => void;
-  onCreateFolder?: (folderPath: string) => void;
-  onDeleteFolder?: (folderPath: string) => void;
-  onRenameFolder?: (oldPath: string, newPath: string) => void;
-  onRenameFile?: (oldPath: string, newPath: string) => void;
-  onDeleteFile?: (filePath: string) => void;
-  onUpsertFile?: (filePath: string, content: string) => void;
   onSetPreviewUrl?: (url: string | null) => void;
   // Signal that any live previews should refresh (e.g., iframe reload)
   onRefreshPreview?: () => void;
@@ -23,20 +15,32 @@ interface UseAgentEventsProps {
 }
 
 export const useAgentEvents = ({
-  setLoading,
-  setCancelling,
-  setLoadingForProject,
-  upsertProposal,
-  onCreateFolder,
-  onDeleteFolder,
-  onRenameFolder,
-  onRenameFile,
-  onDeleteFile,
-  onUpsertFile,
   onSetPreviewUrl,
   onRefreshPreview,
   isActiveRun,
 }: UseAgentEventsProps) => {
+  const {
+    upsertProposal,
+    createFolder,
+    deleteFolder,
+    renameFolder,
+    renameFile,
+    deleteFile,
+    upsertFileIfMissing,
+    setLoading,
+    setCancelling,
+    setLoadingForProject,
+    setLastSandboxSeen,
+    sandboxLastData,
+    // baseline helpers
+    setLastEditorSync,
+    // state needed to initialize baseline
+    project,
+    // ignore predicate to ensure consistent hashing across snapshots
+    isPathIgnored,
+    // whether a baseline already exists
+    hasSandboxBaseline,
+  } = useProjects();
   const { runs, addAction, updateAction, appendActionLog, setRunStatus } = useRuns();
   const runsRef = useRef(runs);
   useEffect(() => { runsRef.current = runs; }, [runs]);
@@ -104,6 +108,16 @@ export const useAgentEvents = ({
         // Auto-refresh previews when commands start running
         if (toolCall.function.name === 'sandbox_run') {
           onRefreshPreview?.();
+          // If we don't yet have a baseline, initialize it from current editor state.
+          // The backend syncs editor files into the sandbox before running, so this is a valid baseline.
+          try {
+            if (!hasSandboxBaseline) {
+              const hashes = computeProjectHashes(project, isPathIgnored);
+              setLastEditorSync({ at: new Date().toISOString(), fileHashes: hashes });
+            }
+          } catch {
+            // noop
+          }
         }
         break;
       }
@@ -124,19 +138,19 @@ export const useAgentEvents = ({
         }
 
         if (toolCall.function.name === 'create_folder' && resp.output_data?.created && resp.output_data?.folder_path) {
-          onCreateFolder?.((resp.output_data.folder_path as string).replace(/^\//,''));
+          createFolder((resp.output_data.folder_path as string).replace(/^\//,''));
         }
         if (toolCall.function.name === 'delete_folder' && resp.output_data?.deleted && resp.output_data?.folder_path) {
-          onDeleteFolder?.((resp.output_data.folder_path as string).replace(/\/$/,''));
+          deleteFolder((resp.output_data.folder_path as string).replace(/\/$/,''));
         }
         if (toolCall.function.name === 'rename_folder' && resp.output_data?.renamed && resp.output_data?.old_path && resp.output_data?.new_path) {
-          onRenameFolder?.(resp.output_data.old_path as string, resp.output_data.new_path as string);
+          renameFolder(resp.output_data.old_path as string, resp.output_data.new_path as string);
         }
         if (toolCall.function.name === 'rename_file' && resp.output_data?.renamed && resp.output_data?.old_path && resp.output_data?.new_path) {
-          onRenameFile?.(resp.output_data.old_path as string, resp.output_data.new_path as string);
+          renameFile(resp.output_data.old_path as string, resp.output_data.new_path as string);
         }
         if (toolCall.function.name === 'delete_file' && resp.output_data?.deleted && resp.output_data?.file_path) {
-          onDeleteFile?.(resp.output_data.file_path as string);
+          deleteFile(resp.output_data.file_path as string);
         }
 
         if (toolCall.function.name === 'request_code_execution') {
@@ -202,7 +216,19 @@ export const useAgentEvents = ({
             const prevUrl = resp.output_data?.preview_url as string | undefined;
             if (prevUrl) onSetPreviewUrl?.(prevUrl);
 
-            if (!resp.output_data?.fs) break;
+            // If the backend didn't return an fs snapshot, align sandbox/editor baselines
+            // so post-run editor edits are classified as editorAhead (enabling autosync).
+            if (!resp.output_data?.fs) {
+              try {
+                const hashes = computeProjectHashes(project, isPathIgnored);
+                const snapshot = { at: new Date().toISOString(), fileHashes: hashes };
+                setLastSandboxSeen(snapshot);
+                setLastEditorSync(snapshot);
+              } catch {
+                // noop
+              }
+              break;
+            }
             try {
               const fs = resp.output_data.fs as {
                 created?: string[];
@@ -211,30 +237,62 @@ export const useAgentEvents = ({
                 data?: Array<{ path: string; encoding?: string; content?: string }>;
               };
 
+              // If there are no filesystem changes and no sampled data, skip snapshot update
+              const hasChanges = Boolean(
+                (fs.created && fs.created.length) ||
+                (fs.updated && fs.updated.length) ||
+                (fs.deleted && fs.deleted.length) ||
+                (fs.data && fs.data.length)
+              );
+              if (!hasChanges) {
+                // No explicit fs changes provided. Assume sandbox mirrors editor after run.
+                try {
+                  const hashes = computeProjectHashes(project, isPathIgnored);
+                  const snapshot = { at: new Date().toISOString(), fileHashes: hashes };
+                  setLastSandboxSeen(snapshot);
+                  setLastEditorSync(snapshot);
+                } catch {
+                  // noop
+                }
+                break;
+              }
+
               const created = new Set((fs.created || []).map(p => (p || '').replace(/^\.\//, '')));
 
               // Ensure all created files are present in the project tree immediately
               created.forEach((p) => {
                 if (!p) return;
-                onUpsertFile?.(p, '');
+                upsertFileIfMissing(p, '');
               });
 
               // Decode provided file contents and surface as proposals
-              const dec = new TextDecoder('utf-8');
               (fs.data || []).forEach((entry) => {
                 const p = (entry.path || '').replace(/^\.\//, '');
                 if (!p) return;
                 if (entry.encoding === 'base64' && typeof entry.content === 'string') {
                   try {
                     const bin = Uint8Array.from(atob(entry.content), c => c.charCodeAt(0));
-                    const text = dec.decode(bin);
-                    // Keep content as proposal; the actual project content is empty until user accepts
+                    const text = new TextDecoder('utf-8').decode(bin);
                     upsertProposal(p, text);
                   } catch {
                     // ignore decode errors
                   }
                 }
               });
+
+              // Update sandbox snapshot state (hashes + lastData)
+              try {
+                // Seed snapshot from the current editor state so missing file contents
+                // (when fs.data omits some files) don't appear as sandboxAhead.
+                const seed = { at: new Date().toISOString(), fileHashes: computeProjectHashes(project, isPathIgnored) };
+                const { snapshot, lastData } = buildSandboxSnapshot(seed, sandboxLastData, fs);
+                setLastSandboxSeen(snapshot, lastData);
+                // Important: align editor baseline to sandbox after runs that include file data.
+                // This prevents persistent diverged/sandbox-ahead states and re-enables autosync on subsequent edits.
+                setLastEditorSync(snapshot);
+              } catch {
+                // ignore snapshot errors
+              }
 
               // For deleted files, we do not remove immediately; this can be shown as a timeline entry
               if ((fs.deleted || []).length > 0) {
@@ -400,12 +458,12 @@ export const useAgentEvents = ({
     setCancelling,
     setLoadingForProject,
     upsertProposal,
-    onCreateFolder,
-    onDeleteFolder,
-    onRenameFolder,
-    onRenameFile,
-    onDeleteFile,
-    onUpsertFile,
+    createFolder,
+    deleteFolder,
+    renameFolder,
+    renameFile,
+    deleteFile,
+    upsertFileIfMissing,
     onSetPreviewUrl,
     onRefreshPreview,
     appendActionLog,
@@ -413,10 +471,12 @@ export const useAgentEvents = ({
     updateAction,
     isActiveRun,
     setRunStatus,
-    // Deliberately exclude runs; use runsRef to avoid stale closures
+    setLastSandboxSeen,
+    sandboxLastData,
+    setLastEditorSync,
+    project,
+    hasSandboxBaseline,
   ]);
 
   return handleEvent;
 };
-
-

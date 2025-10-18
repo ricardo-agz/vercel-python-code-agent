@@ -108,6 +108,7 @@ async def run_agent_flow(
 
     base_payload = {
         "user_id": payload["user_id"],
+        "project_id": payload["project_id"],
         "query": payload["query"],
         "project": filtered_project,
         "message_history": payload.get("message_history", []),

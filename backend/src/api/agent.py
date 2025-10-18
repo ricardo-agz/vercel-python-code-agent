@@ -28,6 +28,7 @@ class RunRequest(BaseModel):
     """Payload to start a new agent run and get an SSE resume token."""
 
     user_id: str
+    project_id: str
     message_history: list[dict[str, str]]
     query: str
     project: dict[str, str]
@@ -61,6 +62,7 @@ async def create_run(request: RunRequest) -> dict[str, Any]:
             "query": request.query,
             "project": request.project,
             "model": request.model,
+            "project_id": request.project_id,
         },
     )
     # Issue a compact token carrying only the run id
