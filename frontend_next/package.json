@@ -3,7 +3,9 @@
   "private": true,
   "version": "0.1.0",
   "scripts": {
+    "predev": "node scripts/build-templates.js",
     "dev": "next dev",
+    "prebuild": "node scripts/build-templates.js",
     "build": "next build",
     "start": "next start",
     "lint": "next lint"

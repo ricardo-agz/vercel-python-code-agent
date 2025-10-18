@@ -24,3 +24,5 @@ dist-ssr
 *.sw?
 .vercel
 .next
+
+src/templates-data.json
