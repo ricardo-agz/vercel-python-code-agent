@@ -102,15 +102,6 @@ export const EditorPane: React.FC<EditorPaneProps> = ({
       && sandboxStatus.diverged === 0
       && sandboxStatus.sandboxAhead === 0
       && Date.now() > (autoSyncBlockedUntilRef.current || 0);
-
-    console.log('shouldAuto', shouldAuto);
-    console.log('isAuthenticated', isAuthenticated);
-    console.log('hasSandboxBaseline', hasSandboxBaseline);
-    console.log('sandboxStatus.editorAhead', sandboxStatus.editorAhead);
-    console.log('sandboxStatus.diverged', sandboxStatus.diverged);
-    console.log('sandboxStatus.sandboxAhead', sandboxStatus.sandboxAhead);
-    console.log('autoSyncBlockedUntilRef.current', autoSyncBlockedUntilRef.current);
-    console.log('Date.now()', Date.now());
     if (!shouldAuto) return;
 
     // Throttle: at most once every 4s; Debounce: 1.2s trailing.

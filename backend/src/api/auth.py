@@ -226,16 +226,6 @@ async def auth_callback_vercel(request: Request) -> Response:
             or not cookie_state
             or state != cookie_state
         ):
-            logger.error(f"Invalid OAuth state: {state} != {cookie_state}")
-            logger.error(f"Code: {code}")
-            logger.error(f"Verifier: {verifier}")
-            logger.error(f"Cookie state: {cookie_state}")
-            logger.error(f"State: {state}")
-            logger.error(f"Request: {request.query_params}")
-            logger.error(f"Cookies: {request.cookies}")
-            logger.error(f"Headers: {request.headers}")
-            logger.error(f"Body: {request.body}")
-            logger.error(f"Form: {request.form}")
             return Response(status_code=400)
 
         origin = _backend_origin(request)
