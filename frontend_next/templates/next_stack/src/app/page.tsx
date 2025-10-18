@@ -7,8 +7,8 @@ function useStatus() {
   const [ping, setPing] = React.useState('pending');
   const [health, setHealth] = React.useState('pending');
   React.useEffect(() => {
-    fetch(`${API_BASE}/ping`).then(r => r.json()).then(d => setPing(d?.message || JSON.stringify(d))).catch((err) => setPing(`error: ${err.message}`));
-    fetch(`${API_BASE}/health`).then(r => r.json()).then(d => setHealth(d?.status || JSON.stringify(d))).catch((err) => setHealth(`error: ${err.message}`));
+    fetch(`${API_BASE}/api/ping`).then(r => r.json()).then(d => setPing(d?.message || JSON.stringify(d))).catch((err) => setPing(`error: ${err.message}`));
+    fetch(`${API_BASE}/api/health`).then(r => r.json()).then(d => setHealth(d?.status || JSON.stringify(d))).catch((err) => setHealth(`error: ${err.message}`));
   }, []);
   return { ping, health } as const;
 }
@@ -20,8 +20,8 @@ export default function Page() {
       <main className="flex flex-col gap-[12px] row-start-2 items-center sm:items-start">
         <h1 className="text-xl font-semibold">Next.js (Stack)</h1>
         <div className="text-sm">
-          <div><strong>/ping</strong>: {String(ping)}</div>
-          <div><strong>/health</strong>: {String(health)}</div>
+          <div><strong>/api/ping</strong>: {String(ping)}</div>
+          <div><strong>/api/health</strong>: {String(health)}</div>
         </div>
       </main>
     </div>
