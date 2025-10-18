@@ -21,7 +21,11 @@ export const SSE_ORIGIN = (() => {
   }
   if (typeof window !== 'undefined') {
     const { protocol, hostname } = window.location;
-    if (hostname === 'localhost' || hostname === '127.0.0.1' || hostname.endsWith('.local')) {
+    // If running locally or via LAN/IP, prefer direct backend default port 8081
+    const isLocalHost = hostname === 'localhost' || hostname === '127.0.0.1' || hostname.endsWith('.local');
+    const isPrivateIp = /^(10\.|192\.168\.|172\.(1[6-9]|2[0-9]|3[0-1])\.)/.test(hostname);
+    const isIp = /^(\d{1,3}\.){3}\d{1,3}$/.test(hostname);
+    if (isLocalHost || isPrivateIp || isIp) {
       return `${protocol}//${hostname}:8081`;
     }
   }

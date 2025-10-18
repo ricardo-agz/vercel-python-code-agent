@@ -510,8 +510,6 @@ export const ProjectsProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     [activeState.sandbox?.lastEditorSync, activeState.sandbox?.lastSandboxSeen]
   );
 
-  // (setLastEditorSync/setLastSandboxSeen moved above to avoid TDZ when used in syncSandboxNow)
-
   const markSyncOnNextRun = React.useCallback(() => {
     setProjectStates(prev => ({
       ...prev,

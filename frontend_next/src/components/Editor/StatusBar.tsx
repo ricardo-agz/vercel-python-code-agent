@@ -86,6 +86,14 @@ export const StatusBar: React.FC<StatusBarProps> = ({ line, column, language }) 
             <path d="M37.59 0L75.18 65H0z" fill="#ffffff" />
           </svg>
         </button>
+        {/* <div className="text-lg text-white fixed top-0 left-0">
+          {JSON.stringify(hasSandboxBaseline)}
+          {JSON.stringify(sandboxStatus)}
+          {JSON.stringify(sandboxAheadPaths)}
+          {JSON.stringify(divergedPaths)}
+          {JSON.stringify(sandboxAheadPaths.length + divergedPaths.length)}
+          {JSON.stringify(sandboxAheadPaths.length + divergedPaths.length > 0)}
+        </div> */}
         {hasSandboxBaseline && (
         <div className="ml-2 relative">
           {sandboxStatus.editorAhead + sandboxStatus.sandboxAhead + sandboxStatus.diverged > 0 && (
