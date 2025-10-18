@@ -1,5 +1,5 @@
 import { useRef, useMemo, useCallback } from 'react';
-import { API_BASE } from '../constants';
+import { API_BASE, SSE_ORIGIN } from '../constants';
 import type { AgentEvent } from '../types';
 
 interface UseAgentStreamProps {
@@ -10,14 +10,14 @@ export function useAgentStream({ onMessage }: UseAgentStreamProps) {
   const sourcesRef = useRef<Record<string, EventSource>>({});
 
   const apiOrigin = useMemo(() => {
-    // Derive origin for SSE endpoints from API_BASE
+    // Prefer explicit SSE_ORIGIN to bypass rewrite buffering; otherwise infer from API_BASE.
+    if (SSE_ORIGIN) return SSE_ORIGIN;
     try {
       const url = new URL(API_BASE);
-      const trimmed = API_BASE.replace(/\/?$/,'');
+      const trimmed = API_BASE.replace(/\/?$/, '');
       return trimmed.endsWith('/api') ? trimmed.slice(0, -4) : url.origin;
     } catch {
-      // Fallback: strip trailing /api if present
-      return API_BASE.replace(/\/?$/,'').replace(/\/api$/, '');
+      return API_BASE.replace(/\/?$/, '').replace(/\/api$/, '');
     }
   }, []);
 

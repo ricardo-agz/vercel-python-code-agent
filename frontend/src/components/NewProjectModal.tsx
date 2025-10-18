@@ -1,5 +1,5 @@
 import React from 'react';
-import { TEMPLATES, FRONTEND_TEMPLATE_IDS, BACKEND_TEMPLATE_IDS } from '../templates/index';
+import { TEMPLATES, FRONTEND_TEMPLATE_IDS, BACKEND_TEMPLATE_IDS } from '../templates';
 
 // Template icon configuration - can be a single icon or array for stacked icons
 // Each icon can be either a domain for favicon or 'icon:' prefix for regular icons

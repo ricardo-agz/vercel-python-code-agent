@@ -24,7 +24,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
   suggestions,
 }) => {
   const textareaRef = React.useRef<HTMLTextAreaElement>(null);
-  const MAX_TEXTAREA_HEIGHT = window.innerHeight / 2;
+  const MAX_TEXTAREA_HEIGHT = typeof window !== 'undefined' ? window.innerHeight / 2 : 400;
 
   const adjustTextareaHeight = React.useCallback(() => {
     const el = textareaRef.current;

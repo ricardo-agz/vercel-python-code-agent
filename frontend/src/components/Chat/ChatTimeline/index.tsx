@@ -2,11 +2,11 @@ import React from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { MessageSquare, Loader, Box, Settings } from 'lucide-react';
-import type { Action, ExecResultAction } from '../../../types/run.ts';
-import { PreviewCard } from './PreviewCard.tsx';
-import { MiniTerminal } from './MiniTerminal.tsx';
-import { RuntimePill } from './RuntimePill.tsx';
-import { ExecResultItem } from './ExecResultItem.tsx';
+import type { Action, ExecResultAction } from '../../../types/run';
+import { PreviewCard } from './PreviewCard';
+import { MiniTerminal } from './MiniTerminal';
+import { RuntimePill } from './RuntimePill';
+import { ExecResultItem } from './ExecResultItem';
 
 interface ChatTimelineProps {
   actions: Action[];

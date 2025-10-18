@@ -2,7 +2,7 @@ import React from 'react';
 import { loadPersistedState, savePersistedState, type PersistedState, type PersistedProjectState } from '../lib/persistence';
 import type { SandboxState, Snapshot } from '../types/sandbox';
 import { computeProjectHashes, type FileHashes } from '../lib/hash';
-import { getTemplateById, getStackById, TEMPLATES } from '../templates/index';
+import { getTemplateById, getStackById, TEMPLATES } from '../templates';
 import { API_BASE } from '../constants';
 import { getUserId } from '../lib/user';
 
@@ -509,8 +509,6 @@ export const ProjectsProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     () => Boolean(activeState.sandbox?.lastEditorSync || activeState.sandbox?.lastSandboxSeen),
     [activeState.sandbox?.lastEditorSync, activeState.sandbox?.lastSandboxSeen]
   );
-
-  // (setLastEditorSync/setLastSandboxSeen moved above to avoid TDZ when used in syncSandboxNow)
 
   const markSyncOnNextRun = React.useCallback(() => {
     setProjectStates(prev => ({

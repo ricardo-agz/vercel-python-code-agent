@@ -4,6 +4,7 @@ import { useRuns } from '../context/RunContext';
 import type { Action } from '../types/run';
 import { useProjects } from '../context/ProjectsContext';
 import { buildSandboxSnapshot } from '../lib/sandbox';
+import { computeProjectHashes } from '../lib/hash';
 
 interface UseAgentEventsProps {
   onSetPreviewUrl?: (url: string | null) => void;
@@ -31,6 +32,14 @@ export const useAgentEvents = ({
     setLoadingForProject,
     setLastSandboxSeen,
     sandboxLastData,
+    // baseline helpers
+    setLastEditorSync,
+    // state needed to initialize baseline
+    project,
+    // ignore predicate to ensure consistent hashing across snapshots
+    isPathIgnored,
+    // whether a baseline already exists
+    hasSandboxBaseline,
   } = useProjects();
   const { runs, addAction, updateAction, appendActionLog, setRunStatus } = useRuns();
   const runsRef = useRef(runs);
@@ -99,6 +108,16 @@ export const useAgentEvents = ({
         // Auto-refresh previews when commands start running
         if (toolCall.function.name === 'sandbox_run') {
           onRefreshPreview?.();
+          // If we don't yet have a baseline, initialize it from current editor state.
+          // The backend syncs editor files into the sandbox before running, so this is a valid baseline.
+          try {
+            if (!hasSandboxBaseline) {
+              const hashes = computeProjectHashes(project, isPathIgnored);
+              setLastEditorSync({ at: new Date().toISOString(), fileHashes: hashes });
+            }
+          } catch {
+            // noop
+          }
         }
         break;
       }
@@ -197,7 +216,19 @@ export const useAgentEvents = ({
             const prevUrl = resp.output_data?.preview_url as string | undefined;
             if (prevUrl) onSetPreviewUrl?.(prevUrl);
 
-            if (!resp.output_data?.fs) break;
+            // If the backend didn't return an fs snapshot, align sandbox/editor baselines
+            // so post-run editor edits are classified as editorAhead (enabling autosync).
+            if (!resp.output_data?.fs) {
+              try {
+                const hashes = computeProjectHashes(project, isPathIgnored);
+                const snapshot = { at: new Date().toISOString(), fileHashes: hashes };
+                setLastSandboxSeen(snapshot);
+                setLastEditorSync(snapshot);
+              } catch {
+                // noop
+              }
+              break;
+            }
             try {
               const fs = resp.output_data.fs as {
                 created?: string[];
@@ -213,7 +244,18 @@ export const useAgentEvents = ({
                 (fs.deleted && fs.deleted.length) ||
                 (fs.data && fs.data.length)
               );
-              if (!hasChanges) break;
+              if (!hasChanges) {
+                // No explicit fs changes provided. Assume sandbox mirrors editor after run.
+                try {
+                  const hashes = computeProjectHashes(project, isPathIgnored);
+                  const snapshot = { at: new Date().toISOString(), fileHashes: hashes };
+                  setLastSandboxSeen(snapshot);
+                  setLastEditorSync(snapshot);
+                } catch {
+                  // noop
+                }
+                break;
+              }
 
               const created = new Set((fs.created || []).map(p => (p || '').replace(/^\.\//, '')));
 
@@ -240,8 +282,14 @@ export const useAgentEvents = ({
 
               // Update sandbox snapshot state (hashes + lastData)
               try {
-                const { snapshot, lastData } = buildSandboxSnapshot(undefined, sandboxLastData, fs);
+                // Seed snapshot from the current editor state so missing file contents
+                // (when fs.data omits some files) don't appear as sandboxAhead.
+                const seed = { at: new Date().toISOString(), fileHashes: computeProjectHashes(project, isPathIgnored) };
+                const { snapshot, lastData } = buildSandboxSnapshot(seed, sandboxLastData, fs);
                 setLastSandboxSeen(snapshot, lastData);
+                // Important: align editor baseline to sandbox after runs that include file data.
+                // This prevents persistent diverged/sandbox-ahead states and re-enables autosync on subsequent edits.
+                setLastEditorSync(snapshot);
               } catch {
                 // ignore snapshot errors
               }
@@ -425,9 +473,10 @@ export const useAgentEvents = ({
     setRunStatus,
     setLastSandboxSeen,
     sandboxLastData,
+    setLastEditorSync,
+    project,
+    hasSandboxBaseline,
   ]);
 
   return handleEvent;
 };
-
-

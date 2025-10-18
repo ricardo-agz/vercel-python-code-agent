@@ -41,7 +41,7 @@ export const EditorPane: React.FC<EditorPaneProps> = ({
   const diffEditorRef = React.useRef<DiffEditorRef>(null);
   const editorRef = React.useRef<monaco.editor.IStandaloneCodeEditor | null>(null);
   const monacoInstance = useMonaco();
-  const { sandboxStatus, project, proposals, activeProjectId, setLastEditorSync, setLastSandboxSeen, setAutoSyncing, hasSandboxBaseline, editorAheadPaths } = useProjects() as unknown as {
+  const { sandboxStatus, project, proposals, activeProjectId, setLastEditorSync, setLastSandboxSeen, setAutoSyncing, hasSandboxBaseline, editorAheadPaths, isPathIgnored } = useProjects() as unknown as {
     sandboxStatus: { editorAhead: number; sandboxAhead: number; diverged: number };
     project: Record<string, string>;
     proposals: Record<string, string>;
@@ -51,6 +51,7 @@ export const EditorPane: React.FC<EditorPaneProps> = ({
     setAutoSyncing: (v: boolean) => void;
     hasSandboxBaseline: boolean;
     editorAheadPaths: string[];
+    isPathIgnored: (p: string) => boolean;
   };
   const { isAuthenticated, openModal } = useAuth();
   const isOutOfSync = (sandboxStatus.editorAhead + sandboxStatus.sandboxAhead + sandboxStatus.diverged) > 0;
@@ -77,7 +78,7 @@ export const EditorPane: React.FC<EditorPaneProps> = ({
       const data = await resp.json().catch(() => ({ ok: false }));
       if (resp.ok && data && data.ok) {
         // Mark sandbox as in-sync only on success
-        const hashes = computeProjectHashes(merged);
+        const hashes = computeProjectHashes(merged, isPathIgnored);
         const now = new Date().toISOString();
         setLastEditorSync({ at: now, fileHashes: hashes });
         setLastSandboxSeen({ at: now, fileHashes: hashes });
@@ -90,7 +91,7 @@ export const EditorPane: React.FC<EditorPaneProps> = ({
     } finally {
       setSyncing(false);
     }
-  }, [isAuthenticated, openModal, project, proposals, activeProjectId, setLastEditorSync, setLastSandboxSeen, syncing]);
+  }, [isAuthenticated, openModal, project, proposals, activeProjectId, setLastEditorSync, setLastSandboxSeen, syncing, isPathIgnored]);
 
   // Debounced auto-sync on edits
   React.useEffect(() => {
@@ -101,6 +102,15 @@ export const EditorPane: React.FC<EditorPaneProps> = ({
       && sandboxStatus.diverged === 0
       && sandboxStatus.sandboxAhead === 0
       && Date.now() > (autoSyncBlockedUntilRef.current || 0);
+
+    console.log('shouldAuto', shouldAuto);
+    console.log('isAuthenticated', isAuthenticated);
+    console.log('hasSandboxBaseline', hasSandboxBaseline);
+    console.log('sandboxStatus.editorAhead', sandboxStatus.editorAhead);
+    console.log('sandboxStatus.diverged', sandboxStatus.diverged);
+    console.log('sandboxStatus.sandboxAhead', sandboxStatus.sandboxAhead);
+    console.log('autoSyncBlockedUntilRef.current', autoSyncBlockedUntilRef.current);
+    console.log('Date.now()', Date.now());
     if (!shouldAuto) return;
 
     // Throttle: at most once every 4s; Debounce: 1.2s trailing.
@@ -135,7 +145,7 @@ export const EditorPane: React.FC<EditorPaneProps> = ({
         const data = await resp.json().catch(() => ({ ok: false }));
         if (resp.ok && data && data.ok) {
           lastSyncAtRef.current = Date.now();
-          const hashes = computeProjectHashes({ ...project, ...(proposals || {}) });
+          const hashes = computeProjectHashes({ ...project, ...(proposals || {}) }, isPathIgnored);
           const nowISO = new Date().toISOString();
           setLastEditorSync({ at: nowISO, fileHashes: hashes });
           setLastSandboxSeen({ at: nowISO, fileHashes: hashes });
@@ -157,7 +167,7 @@ export const EditorPane: React.FC<EditorPaneProps> = ({
     return () => {
       if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
     };
-  }, [project, proposals, sandboxStatus.editorAhead, sandboxStatus.diverged, sandboxStatus.sandboxAhead, isAuthenticated, hasSandboxBaseline, activeProjectId, setLastEditorSync, setLastSandboxSeen, setAutoSyncing, syncing, editorAheadPaths]);
+  }, [project, proposals, sandboxStatus.editorAhead, sandboxStatus.diverged, sandboxStatus.sandboxAhead, hasSandboxBaseline, activeProjectId, setLastEditorSync, setLastSandboxSeen, setAutoSyncing, syncing, editorAheadPaths, isPathIgnored]);
 
   // Create a Monaco theme that follows our CSS variables (Vercel dark)
   React.useEffect(() => {
